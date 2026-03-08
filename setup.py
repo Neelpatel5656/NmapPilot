@@ -24,6 +24,7 @@ setup(
         "flask",
         "flask-socketio",
         "requests",
+        "qrcode",
     ],
     package_data={
         "nmappilot": [

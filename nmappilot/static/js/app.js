@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
-   NmapPilot AI — Client-Side Application (v4 — Command-Based)
+   NmapPilot AI — Client-Side Application (v5 — Reports + Mobile)
    ═══════════════════════════════════════════════════════════════ */
 
 // ── State ──
@@ -10,12 +10,14 @@ let currentStreamRaw = '';
 let aiTimeoutTimer = null;
 let commandRunning = false;
 let currentCmdOutput = null;
+let lastCmdData = null;  // Store last completed command data for reports
 
 // ── Initialize ──
 document.addEventListener('DOMContentLoaded', () => {
     initSocket();
     initNavigation();
     initChatInput();
+    initMobileMenu();
     checkStatus();
     loadSettings();
 });
@@ -61,8 +63,10 @@ function initSocket() {
 
     socket.on('command_complete', (data) => {
         commandRunning = false;
+        lastCmdData = data;
         const status = data.exit_code === 0 ? 'COMPLETE' : `EXIT: ${data.exit_code}`;
         appendTerminal(`✔ Command finished (${status})`, 'success');
+
         if (currentCmdOutput) {
             const badge = currentCmdOutput.querySelector('.cmd-exec-badge');
             if (badge) {
@@ -71,6 +75,9 @@ function initSocket() {
             }
             const stopBtn = currentCmdOutput.querySelector('.cmd-stop-btn');
             if (stopBtn) stopBtn.style.display = 'none';
+
+            // Show report actions
+            showReportActions(currentCmdOutput, data);
         }
         currentCmdOutput = null;
     });
@@ -105,12 +112,17 @@ function updateStatusText(text) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  Navigation
+//  Navigation + Mobile Menu
 // ═══════════════════════════════════════════════════════════════
 
 function initNavigation() {
     document.querySelectorAll('.nav-item').forEach(btn => {
-        btn.addEventListener('click', () => switchPanel(btn.dataset.panel));
+        btn.addEventListener('click', () => {
+            switchPanel(btn.dataset.panel);
+            // Close mobile sidebar
+            document.getElementById('sidebar').classList.remove('mobile-open');
+            document.getElementById('sidebar-overlay').classList.remove('active');
+        });
     });
 }
 
@@ -121,6 +133,25 @@ function switchPanel(panelId) {
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
     const panel = document.getElementById(`panel-${panelId}`);
     if (panel) panel.classList.add('active');
+}
+
+function initMobileMenu() {
+    const menuBtn = document.getElementById('mobile-menu-btn');
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('sidebar-overlay');
+
+    if (menuBtn) {
+        menuBtn.addEventListener('click', () => {
+            sidebar.classList.toggle('mobile-open');
+            overlay.classList.toggle('active');
+        });
+    }
+    if (overlay) {
+        overlay.addEventListener('click', () => {
+            sidebar.classList.remove('mobile-open');
+            overlay.classList.remove('active');
+        });
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -209,7 +240,6 @@ function renderMarkdown(text) {
 // ═══════════════════════════════════════════════════════════════
 
 function handleAIStream(data) {
-    // First token — create the message container
     if (!currentStreamMsg && !data.done) {
         removeTypingIndicator();
         clearTimeout(aiTimeoutTimer);
@@ -234,7 +264,6 @@ function handleAIStream(data) {
         currentStreamRaw += data.token;
     }
 
-    // Live update the explanation part (strip JSON blocks)
     if (currentStreamMsg) {
         const bubble = currentStreamMsg.querySelector('.stream-bubble');
         if (bubble) {
@@ -244,10 +273,8 @@ function handleAIStream(data) {
         scrollChatToBottom();
     }
 
-    // Done — finalize, extract command cards
     if (data.done) {
         if (currentStreamMsg) {
-            // Extract and render command cards
             const commands = extractCommands(currentStreamRaw);
             if (commands.length > 0) {
                 const container = currentStreamMsg.querySelector('.command-cards-container');
@@ -255,8 +282,6 @@ function handleAIStream(data) {
                     container.innerHTML = commands.map((c, i) => buildCommandCard(c, i)).join('');
                 }
             }
-
-            // Clean up the explanation text (remove JSON blocks)
             const bubble = currentStreamMsg.querySelector('.stream-bubble');
             if (bubble) {
                 const cleaned = stripCommandJSON(currentStreamRaw);
@@ -271,7 +296,6 @@ function handleAIStream(data) {
 
 function extractCommands(text) {
     const commands = [];
-    // Match ```json blocks containing "commands"
     const jsonBlocks = text.match(/```json\s*\n?([\s\S]*?)\n?\s*```/g);
     if (jsonBlocks) {
         for (const block of jsonBlocks) {
@@ -281,23 +305,18 @@ function extractCommands(text) {
                 if (parsed.commands && Array.isArray(parsed.commands)) {
                     for (const cmd of parsed.commands) {
                         if (cmd.cmd) {
-                            commands.push({
-                                cmd: cmd.cmd,
-                                description: cmd.description || '',
-                            });
+                            commands.push({ cmd: cmd.cmd, description: cmd.description || '' });
                         }
                     }
                 }
-            } catch (e) { /* not valid JSON, skip */ }
+            } catch (e) { /* skip */ }
         }
     }
     return commands;
 }
 
 function stripCommandJSON(text) {
-    // Remove ```json blocks that contain "commands"
     let cleaned = text.replace(/```json\s*\n?\s*\{[\s\S]*?"commands"[\s\S]*?\}\s*\n?\s*```/g, '');
-    // Clean up extra whitespace
     cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
     return cleaned || text;
 }
@@ -332,7 +351,6 @@ function runCommand(cmd, btn) {
         return;
     }
 
-    // Create inline output area
     const card = btn.closest('.command-card');
     let outputArea = card.querySelector('.cmd-output-area');
     if (!outputArea) {
@@ -352,6 +370,9 @@ function runCommand(cmd, btn) {
         if (badge) { badge.textContent = 'RUNNING'; badge.className = 'cmd-exec-badge running'; }
         const stopBtn = outputArea.querySelector('.cmd-stop-btn');
         if (stopBtn) stopBtn.style.display = '';
+        // Remove old report actions
+        const oldReport = card.querySelector('.cmd-report-actions');
+        if (oldReport) oldReport.remove();
     }
 
     currentCmdOutput = outputArea;
@@ -369,7 +390,6 @@ function copyCommand(cmd) {
     navigator.clipboard.writeText(cmd).then(() => {
         showToast('Command copied!', 'success');
     }).catch(() => {
-        // Fallback
         const ta = document.createElement('textarea');
         ta.value = cmd; document.body.appendChild(ta); ta.select();
         document.execCommand('copy'); document.body.removeChild(ta);
@@ -390,6 +410,140 @@ function appendCmdOutputLine(line) {
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
     scrollChatToBottom();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Report — Pretty results + HTML export
+// ═══════════════════════════════════════════════════════════════
+
+function showReportActions(outputArea, data) {
+    const card = outputArea.closest('.command-card');
+    if (!card) return;
+
+    // Remove existing report actions
+    const old = card.querySelector('.cmd-report-actions');
+    if (old) old.remove();
+
+    const actions = document.createElement('div');
+    actions.className = 'cmd-report-actions';
+    actions.innerHTML = `
+        <div class="report-header">
+            <span class="report-icon">📊</span>
+            <span class="report-title">Scan Complete — ${data.line_count || 0} lines</span>
+        </div>
+        <div class="report-buttons">
+            <button class="report-btn view-report" onclick="viewReport(this)" data-cmd="${escapeAttr(data.cmd || '')}" data-output="${escapeAttr(data.output || '')}">
+                <span>📋</span> View Report
+            </button>
+            <button class="report-btn export-html" onclick="exportHTMLReport(this)" data-cmd="${escapeAttr(data.cmd || '')}" data-output="${escapeAttr(data.output || '')}">
+                <span>💾</span> Export HTML
+            </button>
+            <button class="report-btn ask-ai" onclick="analyzeWithAI('${escapeAttr(data.cmd || '')}')">
+                <span>🤖</span> Ask AI to Analyze
+            </button>
+        </div>
+    `;
+    card.appendChild(actions);
+    scrollChatToBottom();
+}
+
+function viewReport(btn) {
+    const cmd = btn.dataset.cmd;
+    const output = btn.dataset.output;
+
+    // Parse output for pretty display
+    const lines = output.split('\n');
+    let summaryHTML = '';
+
+    // Extract ports
+    const ports = [];
+    for (const line of lines) {
+        const match = line.match(/^(\d+\/\w+)\s+(open|closed|filtered)\s+(.*)/);
+        if (match) {
+            ports.push({ port: match[1], state: match[2], service: match[3].trim() });
+        }
+    }
+
+    if (ports.length > 0) {
+        const openPorts = ports.filter(p => p.state === 'open');
+        summaryHTML += `<div class="report-summary-stat"><span class="stat-num">${openPorts.length}</span><span class="stat-label">Open Ports</span></div>`;
+        summaryHTML += `<div class="report-summary-stat"><span class="stat-num">${ports.length}</span><span class="stat-label">Total Scanned</span></div>`;
+    }
+
+    // Build inline report
+    const reportDiv = document.createElement('div');
+    reportDiv.className = 'inline-report';
+
+    let portsTable = '';
+    if (ports.length > 0) {
+        portsTable = `
+            <div class="report-section">
+                <div class="report-section-title">📡 Discovered Ports</div>
+                <table class="report-table">
+                    <thead><tr><th>Port</th><th>State</th><th>Service</th></tr></thead>
+                    <tbody>
+                        ${ports.map(p => `<tr><td class="port-cell">${escapeHtml(p.port)}</td><td class="state-${p.state}">${escapeHtml(p.state)}</td><td>${escapeHtml(p.service)}</td></tr>`).join('')}
+                    </tbody>
+                </table>
+            </div>`;
+    }
+
+    reportDiv.innerHTML = `
+        <div class="report-card">
+            <div class="report-card-header">
+                <span>📊</span> Scan Report
+                <button class="report-close" onclick="this.closest('.inline-report').remove()">✕</button>
+            </div>
+            <div class="report-cmd">${escapeHtml(cmd)}</div>
+            ${summaryHTML ? `<div class="report-summary">${summaryHTML}</div>` : ''}
+            ${portsTable}
+            <div class="report-section">
+                <div class="report-section-title">📋 Raw Output</div>
+                <div class="report-raw">${escapeHtml(output)}</div>
+            </div>
+        </div>
+    `;
+
+    // Insert after the command card
+    const card = btn.closest('.command-card');
+    const existing = card.parentElement.querySelector('.inline-report');
+    if (existing) existing.remove();
+    card.after(reportDiv);
+    scrollChatToBottom();
+}
+
+function exportHTMLReport(btn) {
+    const cmd = btn.dataset.cmd;
+    const output = btn.dataset.output;
+
+    fetch('/api/report/html', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cmd, output }),
+    }).then(r => r.blob()).then(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `nmappilot_report_${new Date().toISOString().slice(0,19).replace(/[:-]/g,'')}.html`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast('Report exported!', 'success');
+    }).catch(e => showToast('Export failed: ' + e.message, 'error'));
+}
+
+function analyzeWithAI(cmd) {
+    switchPanel('chat');
+    const input = document.getElementById('chat-input');
+    input.value = `Analyze the results of my last scan: ${cmd}`;
+    input.focus();
+    showToast('Switch to Chat to send the analysis request', 'info');
+}
+
+function escapeAttr(str) {
+    if (!str) return '';
+    return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -436,6 +590,9 @@ function useExample(btn) {
     let text = btn.textContent.trim().replace(/^[^\w"]*/, '').trim().replace(/^[""]|[""]$/g, '');
     input.value = text;
     input.focus();
+    // Close mobile sidebar
+    document.getElementById('sidebar').classList.remove('mobile-open');
+    document.getElementById('sidebar-overlay').classList.remove('active');
 }
 
 function resetChat() {
@@ -445,6 +602,7 @@ function resetChat() {
         messages.innerHTML = '';
         if (welcome) messages.appendChild(welcome);
         currentCmdOutput = null;
+        lastCmdData = null;
         resetWaitingState();
         showToast('Conversation reset', 'info');
     });
@@ -492,6 +650,7 @@ function sendTerminalCommand() {
         return;
     }
 
+    appendTerminal(`$ ${cmd}`, 'system');
     socket.emit('execute_command', { cmd });
 }
 

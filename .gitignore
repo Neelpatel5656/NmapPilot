@@ -30,3 +30,7 @@ nmappilot_report_*.txt
 
 # Temporary scan files
 /tmp/nmappilot_*/
+
+# NmapPilot config (contains API keys — never commit!)
+config.json
+.config/nmappilot/

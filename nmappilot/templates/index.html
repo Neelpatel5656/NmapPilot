@@ -2,15 +2,21 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>NmapPilot AI — Intelligent Network Scanner</title>
     <meta name="description" content="NmapPilot AI — Automated Nmap Scanning & Vulnerability Analysis with AI-powered natural language interface">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#060a10">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
+    <!-- ═══════════ MOBILE OVERLAY ═══════════ -->
+    <div id="sidebar-overlay" class="sidebar-overlay"></div>
+
     <!-- ═══════════ SIDEBAR ═══════════ -->
     <nav id="sidebar" class="sidebar">
         <div class="sidebar-brand">
@@ -54,13 +60,13 @@
         <div class="sidebar-section">
             <div class="section-title">Quick Prompts</div>
             <button class="quick-action" onclick="useExample(this)">
-                <span class="qa-icon">🔍</span> Scan scanme.nmap.org
+                <span class="qa-icon">🔍</span> <span>Scan scanme.nmap.org</span>
             </button>
             <button class="quick-action" onclick="useExample(this)">
-                <span class="qa-icon">⚡</span> Quick scan 192.168.1.1
+                <span class="qa-icon">⚡</span> <span>Quick scan 192.168.1.1</span>
             </button>
             <button class="quick-action" onclick="useExample(this)">
-                <span class="qa-icon">🛡️</span> Vuln scan on my target
+                <span class="qa-icon">🛡️</span> <span>Vuln scan on my target</span>
             </button>
         </div>
 
@@ -79,9 +85,10 @@
         <!-- ── Chat Panel ── -->
         <div class="panel active" id="panel-chat">
             <div class="panel-header">
-                <h1 class="panel-title">
-                    <span class="title-gradient">AI Assistant</span>
-                </h1>
+                <div class="panel-header-left">
+                    <button class="mobile-menu-btn" id="mobile-menu-btn">☰</button>
+                    <h1 class="panel-title"><span class="title-gradient">AI Assistant</span></h1>
+                </div>
                 <div class="panel-actions">
                     <button class="btn-icon" onclick="resetChat()" title="New conversation">
                         <span>🔄</span>
@@ -99,10 +106,10 @@
                                 <div class="welcome-title">NmapPilot AI</div>
                                 <div class="welcome-subtitle">Tell me what you want to scan in natural language. I'll suggest the right nmap commands — you decide which ones to run.</div>
                                 <div class="example-prompts">
-                                    <button class="example-btn" onclick="useExample(this)"><span class="example-icon">🔍</span> Scan scanme.nmap.org for open ports and services</button>
-                                    <button class="example-btn" onclick="useExample(this)"><span class="example-icon">⚡</span> Do a stealth scan on 192.168.1.0/24</button>
+                                    <button class="example-btn" onclick="useExample(this)"><span class="example-icon">🔍</span> Scan scanme.nmap.org for open ports</button>
+                                    <button class="example-btn" onclick="useExample(this)"><span class="example-icon">⚡</span> Stealth scan 192.168.1.0/24</button>
                                     <button class="example-btn" onclick="useExample(this)"><span class="example-icon">🛡️</span> Check 10.0.0.1 for vulnerabilities</button>
-                                    <button class="example-btn" onclick="useExample(this)"><span class="example-icon">💡</span> What nmap flags should I use for a web server audit?</button>
+                                    <button class="example-btn" onclick="useExample(this)"><span class="example-icon">💡</span> What flags for a web server audit?</button>
                                 </div>
                             </div>
                         </div>
@@ -112,8 +119,8 @@
 
             <div class="chat-input-area">
                 <div class="input-wrapper">
-                    <textarea id="chat-input" 
-                              placeholder="Describe what you want to scan or ask a security question..." 
+                    <textarea id="chat-input"
+                              placeholder="Describe what you want to scan..."
                               rows="1"
                               autocomplete="off"></textarea>
                     <button id="send-btn" class="send-btn" onclick="sendMessage()">
@@ -124,7 +131,7 @@
                     </button>
                 </div>
                 <div class="input-hint">
-                    Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for new line
+                    <kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> new line
                 </div>
             </div>
         </div>
@@ -132,11 +139,12 @@
         <!-- ── Terminal Panel ── -->
         <div class="panel" id="panel-terminal">
             <div class="panel-header">
-                <h1 class="panel-title"><span class="title-gradient">Live Terminal</span></h1>
+                <div class="panel-header-left">
+                    <button class="mobile-menu-btn" id="mobile-menu-btn-terminal" onclick="document.getElementById('mobile-menu-btn').click()">☰</button>
+                    <h1 class="panel-title"><span class="title-gradient">Live Terminal</span></h1>
+                </div>
                 <div class="panel-actions">
-                    <button class="btn-icon" onclick="clearTerminal()" title="Clear">
-                        <span>🗑️</span>
-                    </button>
+                    <button class="btn-icon" onclick="clearTerminal()" title="Clear">🗑️</button>
                 </div>
             </div>
             <div class="terminal-container">
@@ -156,11 +164,13 @@
         <!-- ── Settings Panel ── -->
         <div class="panel" id="panel-settings">
             <div class="panel-header">
-                <h1 class="panel-title"><span class="title-gradient">Settings</span></h1>
+                <div class="panel-header-left">
+                    <button class="mobile-menu-btn" id="mobile-menu-btn-settings" onclick="document.getElementById('mobile-menu-btn').click()">☰</button>
+                    <h1 class="panel-title"><span class="title-gradient">Settings</span></h1>
+                </div>
             </div>
 
             <div class="settings-content">
-                <!-- AI Backend Status -->
                 <div class="settings-card">
                     <div class="settings-card-header">
                         <span class="card-icon">🤖</span>
@@ -172,7 +182,6 @@
                     </div>
                 </div>
 
-                <!-- API Key -->
                 <div class="settings-card">
                     <div class="settings-card-header">
                         <span class="card-icon">🔑</span>
@@ -183,9 +192,9 @@
                             <p>To get a <strong>free</strong> API key:</p>
                             <ol>
                                 <li>Go to <a href="https://openrouter.ai/" target="_blank" class="settings-link">openrouter.ai</a></li>
-                                <li>Sign up (free — no credit card needed)</li>
-                                <li>Go to <a href="https://openrouter.ai/keys" target="_blank" class="settings-link">Keys</a> → Create Key</li>
-                                <li>Copy the key and paste it below</li>
+                                <li>Sign up (free — no credit card)</li>
+                                <li><a href="https://openrouter.ai/keys" target="_blank" class="settings-link">Keys</a> → Create Key</li>
+                                <li>Paste below</li>
                             </ol>
                         </div>
                         <div class="settings-form-row">
@@ -195,7 +204,6 @@
                     </div>
                 </div>
 
-                <!-- Model Selection -->
                 <div class="settings-card">
                     <div class="settings-card-header">
                         <span class="card-icon">🧠</span>
@@ -203,32 +211,29 @@
                         <button class="btn-icon" id="refresh-models-btn" onclick="refreshModels()">⟳ Refresh</button>
                     </div>
                     <div class="settings-card-body">
-                        <p class="settings-desc">Select preferred model. If it fails, NmapPilot auto-switches to the next free model.</p>
+                        <p class="settings-desc">Preferred model. Auto-switches if it fails.</p>
                         <div class="settings-form-row">
                             <select id="settings-model" class="form-select">
                                 <option value="">Auto (best available)</option>
                             </select>
-                            <button class="btn-primary" onclick="savePreferredModel()">Set Model</button>
+                            <button class="btn-primary" onclick="savePreferredModel()">Set</button>
                         </div>
                     </div>
                 </div>
 
-                <!-- Ollama Fallback -->
                 <div class="settings-card">
                     <div class="settings-card-header">
                         <span class="card-icon">🏠</span>
                         <span class="card-title">Local Ollama (Fallback)</span>
                     </div>
                     <div class="settings-card-body">
-                        <p class="settings-desc">If all OpenRouter models fail, NmapPilot will try your local Ollama instance. Make sure Ollama is running:</p>
-                        <code class="settings-code">ollama serve</code>
+                        <p class="settings-desc">Fallback when no API key is set. Run: <code class="settings-code-inline">ollama serve</code></p>
                     </div>
                 </div>
             </div>
         </div>
     </main>
 
-    <!-- ═══════════ NOTIFICATION TOAST ═══════════ -->
     <div id="toast-container" class="toast-container"></div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
