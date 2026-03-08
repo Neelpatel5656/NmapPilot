@@ -718,6 +718,8 @@ function resetChat() {
         if (welcome) messages.appendChild(welcome);
         currentCmdOutput = null;
         lastCmdData = null;
+        discoveredPorts = [];
+        lastScanTarget = '';
         resetWaitingState();
         showToast('Conversation reset', 'info');
     });

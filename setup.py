@@ -12,7 +12,7 @@ with open("README.md", encoding="utf-8") as f:
 setup(
     name="nmappilot",
     version=version,
-    description="Automated Nmap Scanning & Vulnerability Analysis Tool",
+    description="AI-Powered Nmap Scanning & Vulnerability Analysis Tool",
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="Neel Patel",

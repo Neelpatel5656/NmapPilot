@@ -20,7 +20,7 @@ info() { echo -e "  ${CYAN}[ℹ]${RESET} $1"; }
 
 echo ""
 echo -e "${CYAN}${BOLD}  ╔══════════════════════════════════════════╗${RESET}"
-echo -e "${CYAN}${BOLD}  ║       NmapPilot — Installer              ║${RESET}"
+echo -e "${CYAN}${BOLD}  ║       NmapPilot v2 — Installer            ║${RESET}"
 echo -e "${CYAN}${BOLD}  ╚══════════════════════════════════════════╝${RESET}"
 echo ""
 
@@ -224,8 +224,11 @@ fi
 
 echo ""
 echo -e "${GREEN}${BOLD}  ✔ Installation complete!${RESET}"
-echo -e "${DIM}  Usage:  sudo nmappilot${RESET}"
-echo -e "${DIM}          sudo nmappilot -t scanme.nmap.org${RESET}"
+echo ""
+echo -e "${BOLD}  Usage:${RESET}"
+echo -e "${DIM}    sudo nmappilot --gui              # AI Web UI (recommended)${RESET}"
+echo -e "${DIM}    sudo nmappilot                     # Interactive CLI mode${RESET}"
+echo -e "${DIM}    sudo nmappilot -t scanme.nmap.org  # Direct CLI scan${RESET}"
 echo ""
 echo -e "${YELLOW}  Note: If 'nmappilot' is not found, restart your terminal or run:${RESET}"
 echo -e "${DIM}    fish:  fish_add_path ~/.local/bin${RESET}"
