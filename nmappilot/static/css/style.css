@@ -867,6 +867,7 @@ body {
         transform: translateX(-100%);
         width: 260px;
         box-shadow: 4px 0 20px rgba(0,0,0,0.5);
+        height: 100vh;
     }
 
     .sidebar.mobile-open {
@@ -877,20 +878,49 @@ body {
     .mobile-menu-btn { display: flex; }
 
     /* Main takes full width */
-    .main-content { width: 100vw; }
+    .main-content { width: 100vw; height: 100vh; }
 
-    /* Panel header */
-    .panel-header { padding: 10px 12px; }
+    /* Panel — full viewport height, flex column */
+    .panel.active {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        height: 100dvh; /* dynamic viewport height for mobile browsers */
+        overflow: hidden;
+    }
+
+    /* Panel header — STICKY at top, never scrolls away */
+    .panel-header {
+        padding: 10px 12px;
+        position: sticky;
+        top: 0;
+        z-index: 50;
+        flex-shrink: 0;
+    }
     .panel-title { font-size: 15px; }
 
-    /* Chat */
-    .chat-container { padding: 10px 8px; }
+    /* Chat container — fills middle, scrolls independently */
+    .chat-container {
+        flex: 1;
+        overflow-y: auto;
+        padding: 10px 8px;
+        min-height: 0; /* critical for flex overflow */
+        -webkit-overflow-scrolling: touch;
+    }
+
     .msg-row { max-width: 98%; gap: 6px; }
     .message-avatar { width: 24px; height: 24px; font-size: 12px; }
     .message-bubble { padding: 8px 10px; font-size: 12.5px; }
 
-    /* Input */
-    .chat-input-area { padding: 8px 8px 10px; }
+    /* Chat input — STICKY at bottom, never pushed away */
+    .chat-input-area {
+        padding: 8px 8px;
+        position: sticky;
+        bottom: 0;
+        z-index: 50;
+        flex-shrink: 0;
+        padding-bottom: max(8px, env(safe-area-inset-bottom));
+    }
     .input-wrapper { padding: 4px 4px 4px 10px; }
     .input-wrapper textarea { font-size: 16px; /* prevents iOS zoom */ }
     .input-hint { display: none; }
@@ -898,7 +928,7 @@ body {
 
     /* Command cards */
     .command-card-actions { flex-direction: column; }
-    .cmd-run-btn, .cmd-copy-btn { width: 100%; justify-content: center; padding: 10px; }
+    .cmd-run-btn, .cmd-copy-btn, .cmd-edit-btn { width: 100%; justify-content: center; padding: 10px; }
 
     /* Report */
     .report-buttons { flex-direction: column; }
@@ -906,13 +936,13 @@ body {
     .report-summary { flex-direction: column; gap: 8px; }
     .report-summary-stat { flex-direction: row; gap: 8px; justify-content: center; }
 
-    /* Settings */
-    .settings-content { padding: 10px; }
+    /* Settings — also flex layout */
+    .settings-content { padding: 10px; flex: 1; min-height: 0; overflow-y: auto; }
     .settings-form-row { flex-direction: column; }
 
-    /* Terminal */
+    /* Terminal — also flex layout */
     .terminal { font-size: 10px; padding: 10px; }
-    .terminal-container { padding: 4px; }
+    .terminal-container { padding: 4px; flex: 1; min-height: 0; }
 
     /* Toast */
     .toast-container { left: 8px; right: 8px; bottom: 8px; }
@@ -934,4 +964,75 @@ body {
     .example-prompts { grid-template-columns: 1fr; }
     .message-avatar { display: none; }
     .msg-row { gap: 0; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   EDITABLE COMMAND CARD
+   ═══════════════════════════════════════════════════════════════ */
+.cmd-edit-btn {
+    display: flex; align-items: center; gap: 5px;
+    padding: 7px 14px;
+    background: transparent; border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    font-family: var(--font-ui); font-size: 11px;
+    cursor: pointer; border-radius: var(--radius-xs); transition: all 0.2s;
+}
+
+.cmd-edit-btn:hover { border-color: var(--neon-yellow); color: var(--neon-yellow); }
+
+.command-edit-input {
+    width: 100%;
+    font-family: var(--font-mono); font-size: 12px;
+    color: var(--neon-cyan);
+    background: rgba(0,0,0,0.4);
+    padding: 8px 12px; border-radius: var(--radius-xs);
+    border: 1px solid rgba(0,240,255,0.2);
+    outline: none;
+    line-height: 1.5;
+    transition: border-color 0.2s;
+}
+
+.command-edit-input:focus {
+    border-color: rgba(0,240,255,0.4);
+    box-shadow: 0 0 10px rgba(0,240,255,0.1);
+}
+
+.cmd-edit-actions {
+    display: flex; gap: 6px; margin-top: 6px;
+}
+
+.cmd-save-btn {
+    display: flex; align-items: center; gap: 5px;
+    padding: 5px 12px;
+    background: linear-gradient(135deg, rgba(74,222,128,0.15), rgba(74,222,128,0.05));
+    border: 1px solid rgba(74,222,128,0.25);
+    color: var(--neon-lime);
+    font-family: var(--font-ui); font-size: 11px;
+    cursor: pointer; border-radius: var(--radius-xs); transition: all 0.2s;
+}
+
+.cmd-save-btn:hover { background: rgba(74,222,128,0.2); }
+
+.cmd-cancel-btn {
+    display: flex; align-items: center; gap: 5px;
+    padding: 5px 12px;
+    background: transparent; border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    font-family: var(--font-ui); font-size: 11px;
+    cursor: pointer; border-radius: var(--radius-xs); transition: all 0.2s;
+}
+
+.cmd-cancel-btn:hover { color: var(--neon-red); border-color: rgba(239,68,68,0.3); }
+
+/* Auto-populated port badge */
+.auto-ports-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px;
+    background: rgba(74,222,128,0.08);
+    border: 1px solid rgba(74,222,128,0.15);
+    border-radius: 10px;
+    font-size: 9px; font-family: var(--font-mono);
+    color: var(--neon-lime);
+    margin-left: 6px;
 }
