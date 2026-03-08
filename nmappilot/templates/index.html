@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NmapPilot AI — Intelligent Network Scanner</title>
+    <meta name="description" content="NmapPilot AI — Automated Nmap Scanning & Vulnerability Analysis with AI-powered natural language interface">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- ═══════════ SIDEBAR ═══════════ -->
+    <nav id="sidebar" class="sidebar">
+        <div class="sidebar-brand">
+            <div class="brand-icon">
+                <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                    <circle cx="14" cy="14" r="12" stroke="url(#grad)" stroke-width="2"/>
+                    <circle cx="14" cy="14" r="5" fill="url(#grad)"/>
+                    <line x1="14" y1="2" x2="14" y2="8" stroke="url(#grad)" stroke-width="1.5"/>
+                    <line x1="14" y1="20" x2="14" y2="26" stroke="url(#grad)" stroke-width="1.5"/>
+                    <line x1="2" y1="14" x2="8" y2="14" stroke="url(#grad)" stroke-width="1.5"/>
+                    <line x1="20" y1="14" x2="26" y2="14" stroke="url(#grad)" stroke-width="1.5"/>
+                    <defs>
+                        <linearGradient id="grad" x1="0" y1="0" x2="28" y2="28">
+                            <stop stop-color="#00f0ff"/>
+                            <stop offset="1" stop-color="#b44dff"/>
+                        </linearGradient>
+                    </defs>
+                </svg>
+            </div>
+            <div class="brand-text">
+                <span class="brand-name">NmapPilot</span>
+                <span class="brand-tag">AI</span>
+            </div>
+        </div>
+
+        <div class="sidebar-nav">
+            <button class="nav-item active" data-panel="chat" id="nav-chat">
+                <span class="nav-icon">💬</span>
+                <span class="nav-label">AI Chat</span>
+            </button>
+            <button class="nav-item" data-panel="dashboard" id="nav-dashboard">
+                <span class="nav-icon">📊</span>
+                <span class="nav-label">Dashboard</span>
+            </button>
+            <button class="nav-item" data-panel="results" id="nav-results">
+                <span class="nav-icon">🔍</span>
+                <span class="nav-label">Results</span>
+            </button>
+            <button class="nav-item" data-panel="terminal" id="nav-terminal">
+                <span class="nav-icon">⌨️</span>
+                <span class="nav-label">Terminal</span>
+            </button>
+        </div>
+
+        <div class="sidebar-section">
+            <div class="section-title">Quick Actions</div>
+            <button class="quick-action" onclick="quickScan('quick')">
+                <span class="qa-icon">⚡</span> Quick Scan
+            </button>
+            <button class="quick-action" onclick="quickScan('aggressive')">
+                <span class="qa-icon">🔥</span> Deep Scan
+            </button>
+            <button class="quick-action" onclick="quickScan('comprehensive')">
+                <span class="qa-icon">🎯</span> Full Audit
+            </button>
+        </div>
+
+        <div class="sidebar-section">
+            <div class="section-title">Scan History</div>
+            <div id="scan-history" class="scan-history">
+                <div class="history-empty">No scans yet</div>
+            </div>
+        </div>
+
+        <div class="sidebar-footer">
+            <div class="ai-status" id="ai-status">
+                <span class="status-dot" id="status-dot"></span>
+                <span class="status-text" id="status-text">Connecting...</span>
+            </div>
+            <div class="version-info">v{{ version }}</div>
+        </div>
+    </nav>
+
+    <!-- ═══════════ MAIN CONTENT ═══════════ -->
+    <main id="main-content" class="main-content">
+        <!-- ── Chat Panel ── -->
+        <div class="panel active" id="panel-chat">
+            <div class="panel-header">
+                <h1 class="panel-title">
+                    <span class="title-gradient">AI Assistant</span>
+                </h1>
+                <div class="panel-actions">
+                    <button class="btn-icon" onclick="resetChat()" title="New conversation">
+                        <span>🔄</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="chat-container" id="chat-container">
+                <div class="chat-messages" id="chat-messages">
+                    <div class="message ai-message welcome-msg">
+                        <div class="message-avatar">🤖</div>
+                        <div class="message-content">
+                            <div class="message-bubble">
+                                <div class="welcome-hero-icon">🛡️</div>
+                                <div class="welcome-title">NmapPilot AI</div>
+                                <div class="welcome-subtitle">Talk to me in natural language — describe your target and I'll handle the scanning, vulnerability analysis, and reporting.</div>
+                                <div class="example-prompts">
+                                    <button class="example-btn" onclick="useExample(this)"><span class="example-icon">🔍</span> Scan scanme.nmap.org for open ports and vulnerabilities</button>
+                                    <button class="example-btn" onclick="useExample(this)"><span class="example-icon">⚡</span> Do a quick scan on 192.168.1.1</button>
+                                    <button class="example-btn" onclick="useExample(this)"><span class="example-icon">🎯</span> Run a comprehensive security audit on my target</button>
+                                    <button class="example-btn" onclick="useExample(this)"><span class="example-icon">💡</span> What common ports should I check for a web server?</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chat-input-area">
+                <div class="input-wrapper">
+                    <textarea id="chat-input" 
+                              placeholder="Describe what you want to scan or ask a security question..." 
+                              rows="1"
+                              autocomplete="off"></textarea>
+                    <button id="send-btn" class="send-btn" onclick="sendMessage()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                    </button>
+                </div>
+                <div class="input-hint">
+                    Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for new line
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Dashboard Panel ── -->
+        <div class="panel" id="panel-dashboard">
+            <div class="panel-header">
+                <h1 class="panel-title"><span class="title-gradient">Scan Dashboard</span></h1>
+            </div>
+
+            <div class="dashboard-content">
+                <!-- Scan Status Card -->
+                <div class="dash-card status-card" id="scan-status-card">
+                    <div class="card-header">
+                        <span class="card-icon">📡</span>
+                        <span class="card-title">Scan Status</span>
+                        <span class="status-badge" id="scan-status-badge">IDLE</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="target-display" id="target-display">
+                            <span class="target-label">No target selected</span>
+                        </div>
+                        <div class="progress-container" id="progress-container" style="display:none">
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+                            </div>
+                            <div class="progress-info">
+                                <span id="progress-text">0%</span>
+                                <span id="progress-task">Waiting...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Stats Grid -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-ports">—</div>
+                        <div class="stat-label">Open Ports</div>
+                        <div class="stat-icon">🔓</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-services">—</div>
+                        <div class="stat-label">Services</div>
+                        <div class="stat-icon">⚙️</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-vulns">—</div>
+                        <div class="stat-label">Vulnerabilities</div>
+                        <div class="stat-icon">🛡️</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-exploits">—</div>
+                        <div class="stat-label">Exploits</div>
+                        <div class="stat-icon">💥</div>
+                    </div>
+                </div>
+
+                <!-- Manual Scan Form -->
+                <div class="dash-card">
+                    <div class="card-header">
+                        <span class="card-icon">🎯</span>
+                        <span class="card-title">Manual Scan</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="scan-form">
+                            <div class="form-row">
+                                <label for="manual-target">Target</label>
+                                <input type="text" id="manual-target" placeholder="IP address or hostname" class="form-input">
+                            </div>
+                            <div class="form-row">
+                                <label for="manual-phase">Scan Depth</label>
+                                <select id="manual-phase" class="form-select">
+                                    <option value="1">Quick (Top 1000 ports)</option>
+                                    <option value="2" selected>Service Detection</option>
+                                    <option value="3">Aggressive (Full ports)</option>
+                                    <option value="4">Comprehensive</option>
+                                </select>
+                            </div>
+                            <div class="form-row form-checkboxes">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="manual-no-vuln">
+                                    <span>Skip vulnerability analysis</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="manual-no-dos">
+                                    <span>Skip DoS assessment</span>
+                                </label>
+                            </div>
+                            <button class="btn-primary" id="manual-scan-btn" onclick="startManualScan()">
+                                <span>🚀</span> Launch Scan
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Results Panel ── -->
+        <div class="panel" id="panel-results">
+            <div class="panel-header">
+                <h1 class="panel-title"><span class="title-gradient">Scan Results</span></h1>
+                <div class="panel-actions">
+                    <button class="btn-icon" onclick="analyzeResults()" title="AI Analysis" id="btn-analyze">
+                        <span>🤖</span> Analyze
+                    </button>
+                </div>
+            </div>
+
+            <div class="results-content" id="results-content">
+                <div class="empty-state" id="results-empty">
+                    <div class="empty-icon">🔍</div>
+                    <h3>No scan results yet</h3>
+                    <p>Start a scan from the AI Chat or Dashboard to see results here.</p>
+                </div>
+
+                <!-- Ports Table -->
+                <div class="results-section" id="ports-section" style="display:none">
+                    <h2 class="section-heading">Open Ports & Services</h2>
+                    <div class="table-wrapper">
+                        <table class="results-table" id="ports-table">
+                            <thead>
+                                <tr>
+                                    <th>Port</th>
+                                    <th>State</th>
+                                    <th>Service</th>
+                                    <th>Product</th>
+                                    <th>Version</th>
+                                </tr>
+                            </thead>
+                            <tbody id="ports-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Vulnerabilities -->
+                <div class="results-section" id="vulns-section" style="display:none">
+                    <h2 class="section-heading">Vulnerability Findings</h2>
+                    <div class="severity-summary" id="severity-summary"></div>
+                    <div id="vulns-list" class="findings-list"></div>
+                </div>
+
+                <!-- Exploits -->
+                <div class="results-section" id="exploits-section" style="display:none">
+                    <h2 class="section-heading">ExploitDB Matches</h2>
+                    <div id="exploits-list" class="findings-list"></div>
+                </div>
+
+                <!-- AI Analysis -->
+                <div class="results-section" id="ai-analysis-section" style="display:none">
+                    <h2 class="section-heading">🤖 AI Analysis</h2>
+                    <div id="ai-analysis-content" class="ai-analysis-box"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Terminal Panel ── -->
+        <div class="panel" id="panel-terminal">
+            <div class="panel-header">
+                <h1 class="panel-title"><span class="title-gradient">Live Terminal</span></h1>
+                <div class="panel-actions">
+                    <button class="btn-icon" onclick="clearTerminal()" title="Clear">
+                        <span>🗑️</span>
+                    </button>
+                </div>
+            </div>
+            <div class="terminal-container">
+                <div class="terminal" id="terminal-output">
+                    <div class="terminal-line system">NmapPilot AI Terminal — Ready</div>
+                    <div class="terminal-line system">Waiting for scan commands...</div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- ═══════════ NOTIFICATION TOAST ═══════════ -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

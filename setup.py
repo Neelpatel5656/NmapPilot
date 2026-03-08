@@ -20,6 +20,18 @@ setup(
     url="https://github.com/Neelpatel5656/NmapPilot",
     packages=find_packages(),
     python_requires=">=3.8",
+    install_requires=[
+        "flask",
+        "flask-socketio",
+        "requests",
+    ],
+    package_data={
+        "nmappilot": [
+            "templates/*.html",
+            "static/css/*.css",
+            "static/js/*.js",
+        ],
+    },
     entry_points={
         "console_scripts": [
             "nmappilot=nmappilot.cli:main",

@@ -74,6 +74,10 @@ Examples:
                         help="Skip vulnerability analysis (scan only)")
     parser.add_argument("--no-color", action="store_true",
                         help="Disable colored output")
+    parser.add_argument("--gui", action="store_true",
+                        help="Launch the AI-powered web GUI")
+    parser.add_argument("--port", type=int, default=1337,
+                        help="Port for the web GUI (default: 1337)")
     parser.add_argument("-v", "--version", action="version",
                         version=f"NmapPilot v{__version__}")
     return parser.parse_args()
@@ -136,6 +140,15 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
 
     args = parse_args()
+
+    # ── GUI mode — launch web interface ──
+    if args.gui:
+        from nmappilot.web_server import run_server
+        print_banner()
+        print(f"\n  {Colors.CYAN}{Colors.BOLD}🚀 Launching AI-powered Web GUI...{Colors.RESET}")
+        print(f"  {Colors.DIM}Open http://127.0.0.1:{args.port} in your browser{Colors.RESET}\n")
+        run_server(host="0.0.0.0", port=args.port)
+        return
 
     # ── Root check — auto-elevate with sudo if not root ──
     if not check_root():
