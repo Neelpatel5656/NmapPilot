@@ -256,12 +256,15 @@ def run_server(host="0.0.0.0", port=1337, debug=False):
     ai_temp = AIEngine()
     ai_temp.initialize()
 
+    server_str = f"http://{host}:{port}"
+    local_str = f"http://127.0.0.1:{port}"
+
     print(f"""
   ╔═══════════════════════════════════════════════════════════╗
   ║  NmapPilot AI GUI                                        ║
   ║  ───────────────────────────────────────────────────────  ║
-  ║  Server:  http://{host}:{port:<36s}║
-  ║  Local:   http://127.0.0.1:{port:<29s}║
+  ║  Server:  {server_str:<42s}║
+  ║  Local:   {local_str:<42s}║
   ║  AI:      {ai_temp.status_message:<42s}║
   ╚═══════════════════════════════════════════════════════════╝
 """)

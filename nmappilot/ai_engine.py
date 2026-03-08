@@ -200,35 +200,49 @@ class AIEngine:
         if self._initialized:
             return
 
-        # Try OpenRouter first
+        print(f"[AIEngine] Initializing... API key set: {bool(self._api_key)}")
+
+        # Try OpenRouter first (ALWAYS preferred when key is set)
         if self._api_key:
             self._discover_free_models()
             if self._free_models:
                 self._backend = "openrouter"
                 model_name = self._free_models[0]
                 self._status_message = f"OpenRouter: {model_name}"
+                print(f"[AIEngine] ✔ Using OpenRouter with {len(self._free_models)} free models. Primary: {model_name}")
                 self._initialized = True
                 return
+            else:
+                print(f"[AIEngine] ⚠ API key set but no free models found")
 
-        # Fall back to Ollama
-        if self._check_ollama():
+        # Only fall back to Ollama if NO API key is configured
+        if not self._api_key and self._check_ollama():
             self._backend = "ollama"
             self._status_message = f"Ollama: {self._ollama_model}"
+            print(f"[AIEngine] Using Ollama fallback: {self._ollama_model}")
             self._initialized = True
             return
 
-        self._backend = "none"
-        self._status_message = "No AI backend available"
+        if self._api_key:
+            self._backend = "openrouter"
+            self._status_message = "OpenRouter: waiting for models"
+            print("[AIEngine] API key set but model fetch failed — will retry on first request")
+        else:
+            self._backend = "none"
+            self._status_message = "No AI backend — set API key in Settings"
+            print("[AIEngine] No backend available")
         self._initialized = True
 
     def _discover_free_models(self):
         """Fetch all free models from OpenRouter API."""
         try:
+            print("[AIEngine] Fetching free models from OpenRouter...")
             resp = requests.get(
                 f"{OPENROUTER_BASE}/models",
                 headers={"Authorization": f"Bearer {self._api_key}"},
-                timeout=10,
+                timeout=15,
             )
+            print(f"[AIEngine] OpenRouter /models response: {resp.status_code}")
             if resp.status_code == 200:
                 models = resp.json().get("data", [])
                 free = []
@@ -239,6 +253,7 @@ class AIEngine:
                     if prompt_price == "0" and completion_price == "0":
                         free.append(m["id"])
 
+                print(f"[AIEngine] Found {len(free)} free models out of {len(models)} total")
                 if free:
                     self._free_models = free
                     # Put preferred model first if it's in the list
@@ -251,12 +266,20 @@ class AIEngine:
                     self._config["free_models"] = self._free_models
                     save_config(self._config)
                     return
-        except Exception:
-            pass
+            else:
+                print(f"[AIEngine] OpenRouter API error: {resp.text[:200]}")
+        except Exception as e:
+            print(f"[AIEngine] Failed to fetch models: {e}")
 
         # Use cached or defaults
         if not self._free_models:
-            self._free_models = list(DEFAULT_FREE_MODELS)
+            cached = load_config().get("free_models", [])
+            if cached:
+                print(f"[AIEngine] Using {len(cached)} cached models")
+                self._free_models = cached
+            else:
+                print(f"[AIEngine] Using {len(DEFAULT_FREE_MODELS)} default models")
+                self._free_models = list(DEFAULT_FREE_MODELS)
 
     def _check_ollama(self) -> bool:
         """Check if Ollama is running and find available models."""
