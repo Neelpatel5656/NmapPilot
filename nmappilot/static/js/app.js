@@ -11,6 +11,8 @@ let aiTimeoutTimer = null;
 let commandRunning = false;
 let currentCmdOutput = null;
 let lastCmdData = null;  // Store last completed command data for reports
+let discoveredPorts = []; // Ports discovered from previous scans
+let lastScanTarget = ''; // Target from last scan
 
 // ── Initialize ──
 document.addEventListener('DOMContentLoaded', () => {
@@ -66,6 +68,11 @@ function initSocket() {
         lastCmdData = data;
         const status = data.exit_code === 0 ? 'COMPLETE' : `EXIT: ${data.exit_code}`;
         appendTerminal(`✔ Command finished (${status})`, 'success');
+
+        // Parse ports from output for auto-population
+        if (data.output) {
+            parseAndStoreDiscoveredPorts(data.output, data.cmd);
+        }
 
         if (currentCmdOutput) {
             const badge = currentCmdOutput.querySelector('.cmd-exec-badge');
@@ -316,33 +323,141 @@ function extractCommands(text) {
 }
 
 function stripCommandJSON(text) {
-    let cleaned = text.replace(/```json\s*\n?\s*\{[\s\S]*?"commands"[\s\S]*?\}\s*\n?\s*```/g, '');
+    // Strip ```json blocks containing "commands"
+    let cleaned = text.replace(/```json[\s\S]*?```/g, (match) => {
+        return match.includes('"commands"') ? '' : match;
+    });
+    // Also strip bare JSON objects with "commands" (no code fence)
+    cleaned = cleaned.replace(/\{\s*"commands"\s*:\s*\[[\s\S]*?\]\s*\}/g, '');
+    // Clean up extra newlines
     cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
     return cleaned || text;
 }
 
 function buildCommandCard(cmd, index) {
-    const escapedCmd = escapeHtml(cmd.cmd);
+    // Auto-substitute placeholders with discovered data
+    let resolvedCmd = autoPopulateCommand(cmd.cmd);
+    const wasModified = resolvedCmd !== cmd.cmd;
+    const escapedCmd = escapeHtml(resolvedCmd);
     const escapedDesc = escapeHtml(cmd.description);
+    const portsBadge = wasModified ? '<span class="auto-ports-badge">✔ ports auto-filled</span>' : '';
     return `
-        <div class="command-card" id="cmd-card-${index}">
+        <div class="command-card" id="cmd-card-${index}" data-original-cmd="${escapeAttr(resolvedCmd)}">
             <div class="command-card-header">
                 <span class="command-card-icon">⚡</span>
-                <span class="command-card-desc">${escapedDesc}</span>
+                <span class="command-card-desc">${escapedDesc}${portsBadge}</span>
             </div>
             <div class="command-card-body">
                 <code class="command-text">${escapedCmd}</code>
             </div>
             <div class="command-card-actions">
-                <button class="cmd-run-btn" onclick="runCommand('${escapedCmd.replace(/'/g, "\\'")}', this)">
+                <button class="cmd-run-btn" onclick="runCommand(this.closest('.command-card').querySelector('.command-text').textContent, this)">
                     <span>▶</span> Run
                 </button>
-                <button class="cmd-copy-btn" onclick="copyCommand('${escapedCmd.replace(/'/g, "\\'")}')">
+                <button class="cmd-edit-btn" onclick="editCommand(this)">
+                    <span>✏️</span> Edit
+                </button>
+                <button class="cmd-copy-btn" onclick="copyCommand(this.closest('.command-card').querySelector('.command-text').textContent)">
                     <span>📋</span> Copy
                 </button>
             </div>
         </div>
     `;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Auto-populate discovered data into commands
+// ═══════════════════════════════════════════════════════════════
+
+function parseAndStoreDiscoveredPorts(output, cmd) {
+    const ports = [];
+    for (const line of output.split('\n')) {
+        const match = line.match(/^(\d+)\/\w+\s+open\s+/);
+        if (match) {
+            ports.push(match[1]);
+        }
+    }
+    if (ports.length > 0) {
+        discoveredPorts = ports;
+        showToast(`📡 Discovered ${ports.length} open ports: ${ports.join(', ')}`, 'success');
+    }
+    // Extract target from command
+    const targetMatch = cmd ? cmd.match(/nmap\s+.*?\s+(\S+)\s*$/) : null;
+    if (targetMatch) {
+        lastScanTarget = targetMatch[1];
+    }
+}
+
+function autoPopulateCommand(cmd) {
+    let result = cmd;
+    // Replace port placeholders
+    if (discoveredPorts.length > 0) {
+        const portList = discoveredPorts.join(',');
+        result = result.replace(/<open_ports>/gi, portList);
+        result = result.replace(/<ports>/gi, portList);
+        result = result.replace(/<discovered_ports>/gi, portList);
+        result = result.replace(/\$OPEN_PORTS/g, portList);
+    }
+    // Replace target placeholders
+    if (lastScanTarget) {
+        result = result.replace(/<target>/gi, lastScanTarget);
+        result = result.replace(/\$TARGET/g, lastScanTarget);
+    }
+    // SAFETY: strip angle brackets around anything that looks like a hostname/IP
+    // This catches cases where the AI wraps real targets in <> (e.g. <example.com>)
+    result = result.replace(/<([a-zA-Z0-9][a-zA-Z0-9._\-\/]+)>/g, '$1');
+    return result;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Editable Command Cards
+// ═══════════════════════════════════════════════════════════════
+
+function editCommand(btn) {
+    const card = btn.closest('.command-card');
+    const body = card.querySelector('.command-card-body');
+    const codeEl = body.querySelector('.command-text');
+    const currentCmd = codeEl.textContent;
+
+    // Replace code display with editable input
+    body.innerHTML = `
+        <input type="text" class="command-edit-input" value="${escapeAttr(currentCmd)}"
+               onkeydown="if(event.key==='Enter') saveEdit(this); if(event.key==='Escape') cancelEdit(this);">
+        <div class="cmd-edit-actions">
+            <button class="cmd-save-btn" onclick="saveEdit(this.closest('.command-card-body').querySelector('.command-edit-input'))">✔ Save</button>
+            <button class="cmd-cancel-btn" onclick="cancelEdit(this.closest('.command-card-body').querySelector('.command-edit-input'))">✕ Cancel</button>
+        </div>
+    `;
+    const input = body.querySelector('.command-edit-input');
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+}
+
+function saveEdit(input) {
+    const card = input.closest('.command-card');
+    const body = card.querySelector('.command-card-body');
+    const newCmd = input.value.trim();
+
+    if (!newCmd) {
+        showToast('Command cannot be empty', 'warning');
+        return;
+    }
+
+    if (!newCmd.startsWith('nmap')) {
+        showToast('Only nmap commands are allowed', 'warning');
+        return;
+    }
+
+    body.innerHTML = `<code class="command-text">${escapeHtml(newCmd)}</code>`;
+    card.dataset.originalCmd = newCmd;
+    showToast('Command updated', 'success');
+}
+
+function cancelEdit(input) {
+    const card = input.closest('.command-card');
+    const body = card.querySelector('.command-card-body');
+    const originalCmd = card.dataset.originalCmd || 'nmap';
+    body.innerHTML = `<code class="command-text">${escapeHtml(originalCmd)}</code>`;
 }
 
 function runCommand(cmd, btn) {
