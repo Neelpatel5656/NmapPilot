@@ -41,38 +41,27 @@
                 <span class="nav-icon">💬</span>
                 <span class="nav-label">AI Chat</span>
             </button>
-            <button class="nav-item" data-panel="dashboard" id="nav-dashboard">
-                <span class="nav-icon">📊</span>
-                <span class="nav-label">Dashboard</span>
-            </button>
-            <button class="nav-item" data-panel="results" id="nav-results">
-                <span class="nav-icon">🔍</span>
-                <span class="nav-label">Results</span>
-            </button>
             <button class="nav-item" data-panel="terminal" id="nav-terminal">
                 <span class="nav-icon">⌨️</span>
                 <span class="nav-label">Terminal</span>
             </button>
-        </div>
-
-        <div class="sidebar-section">
-            <div class="section-title">Quick Actions</div>
-            <button class="quick-action" onclick="quickScan('quick')">
-                <span class="qa-icon">⚡</span> Quick Scan
-            </button>
-            <button class="quick-action" onclick="quickScan('aggressive')">
-                <span class="qa-icon">🔥</span> Deep Scan
-            </button>
-            <button class="quick-action" onclick="quickScan('comprehensive')">
-                <span class="qa-icon">🎯</span> Full Audit
+            <button class="nav-item" data-panel="settings" id="nav-settings">
+                <span class="nav-icon">⚙️</span>
+                <span class="nav-label">Settings</span>
             </button>
         </div>
 
         <div class="sidebar-section">
-            <div class="section-title">Scan History</div>
-            <div id="scan-history" class="scan-history">
-                <div class="history-empty">No scans yet</div>
-            </div>
+            <div class="section-title">Quick Prompts</div>
+            <button class="quick-action" onclick="useExample(this)">
+                <span class="qa-icon">🔍</span> Scan scanme.nmap.org
+            </button>
+            <button class="quick-action" onclick="useExample(this)">
+                <span class="qa-icon">⚡</span> Quick scan 192.168.1.1
+            </button>
+            <button class="quick-action" onclick="useExample(this)">
+                <span class="qa-icon">🛡️</span> Vuln scan on my target
+            </button>
         </div>
 
         <div class="sidebar-footer">
@@ -80,6 +69,7 @@
                 <span class="status-dot" id="status-dot"></span>
                 <span class="status-text" id="status-text">Connecting...</span>
             </div>
+            <div class="status-detail-line" id="status-detail"></div>
             <div class="version-info">v{{ version }}</div>
         </div>
     </nav>
@@ -107,12 +97,12 @@
                             <div class="message-bubble">
                                 <div class="welcome-hero-icon">🛡️</div>
                                 <div class="welcome-title">NmapPilot AI</div>
-                                <div class="welcome-subtitle">Talk to me in natural language — describe your target and I'll handle the scanning, vulnerability analysis, and reporting.</div>
+                                <div class="welcome-subtitle">Tell me what you want to scan in natural language. I'll suggest the right nmap commands — you decide which ones to run.</div>
                                 <div class="example-prompts">
-                                    <button class="example-btn" onclick="useExample(this)"><span class="example-icon">🔍</span> Scan scanme.nmap.org for open ports and vulnerabilities</button>
-                                    <button class="example-btn" onclick="useExample(this)"><span class="example-icon">⚡</span> Do a quick scan on 192.168.1.1</button>
-                                    <button class="example-btn" onclick="useExample(this)"><span class="example-icon">🎯</span> Run a comprehensive security audit on my target</button>
-                                    <button class="example-btn" onclick="useExample(this)"><span class="example-icon">💡</span> What common ports should I check for a web server?</button>
+                                    <button class="example-btn" onclick="useExample(this)"><span class="example-icon">🔍</span> Scan scanme.nmap.org for open ports and services</button>
+                                    <button class="example-btn" onclick="useExample(this)"><span class="example-icon">⚡</span> Do a stealth scan on 192.168.1.0/24</button>
+                                    <button class="example-btn" onclick="useExample(this)"><span class="example-icon">🛡️</span> Check 10.0.0.1 for vulnerabilities</button>
+                                    <button class="example-btn" onclick="useExample(this)"><span class="example-icon">💡</span> What nmap flags should I use for a web server audit?</button>
                                 </div>
                             </div>
                         </div>
@@ -139,158 +129,6 @@
             </div>
         </div>
 
-        <!-- ── Dashboard Panel ── -->
-        <div class="panel" id="panel-dashboard">
-            <div class="panel-header">
-                <h1 class="panel-title"><span class="title-gradient">Scan Dashboard</span></h1>
-            </div>
-
-            <div class="dashboard-content">
-                <!-- Scan Status Card -->
-                <div class="dash-card status-card" id="scan-status-card">
-                    <div class="card-header">
-                        <span class="card-icon">📡</span>
-                        <span class="card-title">Scan Status</span>
-                        <span class="status-badge" id="scan-status-badge">IDLE</span>
-                    </div>
-                    <div class="card-body">
-                        <div class="target-display" id="target-display">
-                            <span class="target-label">No target selected</span>
-                        </div>
-                        <div class="progress-container" id="progress-container" style="display:none">
-                            <div class="progress-bar">
-                                <div class="progress-fill" id="progress-fill" style="width:0%"></div>
-                            </div>
-                            <div class="progress-info">
-                                <span id="progress-text">0%</span>
-                                <span id="progress-task">Waiting...</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Stats Grid -->
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <div class="stat-value" id="stat-ports">—</div>
-                        <div class="stat-label">Open Ports</div>
-                        <div class="stat-icon">🔓</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="stat-services">—</div>
-                        <div class="stat-label">Services</div>
-                        <div class="stat-icon">⚙️</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="stat-vulns">—</div>
-                        <div class="stat-label">Vulnerabilities</div>
-                        <div class="stat-icon">🛡️</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="stat-exploits">—</div>
-                        <div class="stat-label">Exploits</div>
-                        <div class="stat-icon">💥</div>
-                    </div>
-                </div>
-
-                <!-- Manual Scan Form -->
-                <div class="dash-card">
-                    <div class="card-header">
-                        <span class="card-icon">🎯</span>
-                        <span class="card-title">Manual Scan</span>
-                    </div>
-                    <div class="card-body">
-                        <div class="scan-form">
-                            <div class="form-row">
-                                <label for="manual-target">Target</label>
-                                <input type="text" id="manual-target" placeholder="IP address or hostname" class="form-input">
-                            </div>
-                            <div class="form-row">
-                                <label for="manual-phase">Scan Depth</label>
-                                <select id="manual-phase" class="form-select">
-                                    <option value="1">Quick (Top 1000 ports)</option>
-                                    <option value="2" selected>Service Detection</option>
-                                    <option value="3">Aggressive (Full ports)</option>
-                                    <option value="4">Comprehensive</option>
-                                </select>
-                            </div>
-                            <div class="form-row form-checkboxes">
-                                <label class="checkbox-label">
-                                    <input type="checkbox" id="manual-no-vuln">
-                                    <span>Skip vulnerability analysis</span>
-                                </label>
-                                <label class="checkbox-label">
-                                    <input type="checkbox" id="manual-no-dos">
-                                    <span>Skip DoS assessment</span>
-                                </label>
-                            </div>
-                            <button class="btn-primary" id="manual-scan-btn" onclick="startManualScan()">
-                                <span>🚀</span> Launch Scan
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- ── Results Panel ── -->
-        <div class="panel" id="panel-results">
-            <div class="panel-header">
-                <h1 class="panel-title"><span class="title-gradient">Scan Results</span></h1>
-                <div class="panel-actions">
-                    <button class="btn-icon" onclick="analyzeResults()" title="AI Analysis" id="btn-analyze">
-                        <span>🤖</span> Analyze
-                    </button>
-                </div>
-            </div>
-
-            <div class="results-content" id="results-content">
-                <div class="empty-state" id="results-empty">
-                    <div class="empty-icon">🔍</div>
-                    <h3>No scan results yet</h3>
-                    <p>Start a scan from the AI Chat or Dashboard to see results here.</p>
-                </div>
-
-                <!-- Ports Table -->
-                <div class="results-section" id="ports-section" style="display:none">
-                    <h2 class="section-heading">Open Ports & Services</h2>
-                    <div class="table-wrapper">
-                        <table class="results-table" id="ports-table">
-                            <thead>
-                                <tr>
-                                    <th>Port</th>
-                                    <th>State</th>
-                                    <th>Service</th>
-                                    <th>Product</th>
-                                    <th>Version</th>
-                                </tr>
-                            </thead>
-                            <tbody id="ports-tbody"></tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <!-- Vulnerabilities -->
-                <div class="results-section" id="vulns-section" style="display:none">
-                    <h2 class="section-heading">Vulnerability Findings</h2>
-                    <div class="severity-summary" id="severity-summary"></div>
-                    <div id="vulns-list" class="findings-list"></div>
-                </div>
-
-                <!-- Exploits -->
-                <div class="results-section" id="exploits-section" style="display:none">
-                    <h2 class="section-heading">ExploitDB Matches</h2>
-                    <div id="exploits-list" class="findings-list"></div>
-                </div>
-
-                <!-- AI Analysis -->
-                <div class="results-section" id="ai-analysis-section" style="display:none">
-                    <h2 class="section-heading">🤖 AI Analysis</h2>
-                    <div id="ai-analysis-content" class="ai-analysis-box"></div>
-                </div>
-            </div>
-        </div>
-
         <!-- ── Terminal Panel ── -->
         <div class="panel" id="panel-terminal">
             <div class="panel-header">
@@ -304,7 +142,87 @@
             <div class="terminal-container">
                 <div class="terminal" id="terminal-output">
                     <div class="terminal-line system">NmapPilot AI Terminal — Ready</div>
-                    <div class="terminal-line system">Waiting for scan commands...</div>
+                    <div class="terminal-line system">Type nmap commands below or use AI Chat to generate them.</div>
+                </div>
+                <div class="terminal-input-area">
+                    <span class="terminal-prompt">$</span>
+                    <input type="text" id="terminal-input" placeholder="nmap -sS -T4 192.168.1.1" autocomplete="off"
+                           onkeydown="if(event.key==='Enter'){sendTerminalCommand();}">
+                    <button class="terminal-run-btn" onclick="sendTerminalCommand()">Run</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Settings Panel ── -->
+        <div class="panel" id="panel-settings">
+            <div class="panel-header">
+                <h1 class="panel-title"><span class="title-gradient">Settings</span></h1>
+            </div>
+
+            <div class="settings-content">
+                <!-- AI Backend Status -->
+                <div class="settings-card">
+                    <div class="settings-card-header">
+                        <span class="card-icon">🤖</span>
+                        <span class="card-title">AI Backend</span>
+                        <span class="settings-badge" id="settings-backend">Checking...</span>
+                    </div>
+                    <div class="settings-card-body">
+                        <p class="settings-desc">NmapPilot uses <strong>OpenRouter</strong> to access free AI models. All models are free — no charges.</p>
+                    </div>
+                </div>
+
+                <!-- API Key -->
+                <div class="settings-card">
+                    <div class="settings-card-header">
+                        <span class="card-icon">🔑</span>
+                        <span class="card-title">OpenRouter API Key</span>
+                    </div>
+                    <div class="settings-card-body">
+                        <div class="settings-guide">
+                            <p>To get a <strong>free</strong> API key:</p>
+                            <ol>
+                                <li>Go to <a href="https://openrouter.ai/" target="_blank" class="settings-link">openrouter.ai</a></li>
+                                <li>Sign up (free — no credit card needed)</li>
+                                <li>Go to <a href="https://openrouter.ai/keys" target="_blank" class="settings-link">Keys</a> → Create Key</li>
+                                <li>Copy the key and paste it below</li>
+                            </ol>
+                        </div>
+                        <div class="settings-form-row">
+                            <input type="password" id="settings-api-key" class="form-input" placeholder="sk-or-v1-...">
+                            <button class="btn-primary" id="save-key-btn" onclick="saveApiKey()">Save Key</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Model Selection -->
+                <div class="settings-card">
+                    <div class="settings-card-header">
+                        <span class="card-icon">🧠</span>
+                        <span class="card-title">AI Model</span>
+                        <button class="btn-icon" id="refresh-models-btn" onclick="refreshModels()">⟳ Refresh</button>
+                    </div>
+                    <div class="settings-card-body">
+                        <p class="settings-desc">Select preferred model. If it fails, NmapPilot auto-switches to the next free model.</p>
+                        <div class="settings-form-row">
+                            <select id="settings-model" class="form-select">
+                                <option value="">Auto (best available)</option>
+                            </select>
+                            <button class="btn-primary" onclick="savePreferredModel()">Set Model</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Ollama Fallback -->
+                <div class="settings-card">
+                    <div class="settings-card-header">
+                        <span class="card-icon">🏠</span>
+                        <span class="card-title">Local Ollama (Fallback)</span>
+                    </div>
+                    <div class="settings-card-body">
+                        <p class="settings-desc">If all OpenRouter models fail, NmapPilot will try your local Ollama instance. Make sure Ollama is running:</p>
+                        <code class="settings-code">ollama serve</code>
+                    </div>
                 </div>
             </div>
         </div>

@@ -1,14 +1,15 @@
-"""NmapPilot — Flask web server with WebSocket support for the GUI."""
+"""NmapPilot — Flask web server with command-based architecture."""
 
 import os
 import json
+import subprocess
 import threading
-from flask import Flask, render_template, request, jsonify, send_from_directory
+import re
+from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
 
 from nmappilot import __version__
-from nmappilot.ai_engine import OllamaAI
-from nmappilot.web_scanner import WebScanner
+from nmappilot.ai_engine import AIEngine
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -31,10 +32,9 @@ def create_app():
                         allow_upgrades=False)
 
     # ── Shared state ──
-    ai = OllamaAI()
-    scanner = WebScanner(emit_fn=lambda event, data: socketio.emit(event, data))
-    scan_history = []
-    _ai_stream_lock = threading.Lock()  # Prevent concurrent AI streams
+    ai = AIEngine()
+    _ai_stream_lock = threading.Lock()
+    _cmd_process = {"proc": None, "running": False}  # Track running command
 
     # ═══════════════════════════════════════════════════════════════
     #  Routes
@@ -46,49 +46,37 @@ def create_app():
 
     @app.route("/api/status")
     def api_status():
+        ai.initialize()
         return jsonify({
             "version": __version__,
-            "ai_available": ai.is_available(),
-            "model": ai.model,
-            "scan_running": scanner.is_running,
+            "ai_available": ai.is_available,
+            "backend": ai.backend,
+            "model": ai.current_model,
+            "status": ai.status_message,
+            "command_running": _cmd_process["running"],
         })
 
-    # ── AI Chat (streaming via SocketIO — primary path) ────────
+    # ── Config (API key, model selection) ──────────────────────
 
-    import re as _re
+    @app.route("/api/config", methods=["GET"])
+    def api_config_get():
+        return jsonify(ai.get_config())
 
-    def _quick_scan_detect(msg):
-        """Fast regex-based scan intent detection (no AI call needed)."""
-        msg_lower = msg.lower()
-        scan_words = ['scan', 'nmap', 'enumerate', 'recon', 'audit',
-                      'check ports', 'find open', 'probe', 'sweep']
-        has_scan_intent = any(w in msg_lower for w in scan_words)
-        if not has_scan_intent:
-            return None
+    @app.route("/api/config", methods=["POST"])
+    def api_config_set():
+        data = request.get_json() or {}
+        if "api_key" in data:
+            ai.set_api_key(data["api_key"])
+        if "preferred_model" in data:
+            ai.set_preferred_model(data["preferred_model"])
+        return jsonify(ai.get_config())
 
-        # Extract target
-        ip_m = _re.search(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?)\b', msg)
-        domain_m = _re.search(
-            r'\b([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z]{2,})+)\b', msg)
-        target = (ip_m and ip_m.group(1)) or (domain_m and domain_m.group(1))
-        if not target:
-            return None
+    @app.route("/api/config/refresh-models", methods=["POST"])
+    def api_refresh_models():
+        ai.refresh_models()
+        return jsonify(ai.get_config())
 
-        # Determine scan depth
-        max_phase = 2
-        scan_type = 'service'
-        if any(w in msg_lower for w in ['quick', 'fast', 'basic']):
-            max_phase, scan_type = 1, 'quick'
-        elif any(w in msg_lower for w in ['aggressive', 'deep', 'full', 'thorough']):
-            max_phase, scan_type = 3, 'aggressive'
-        elif any(w in msg_lower for w in ['comprehensive', 'everything', 'complete', 'all']):
-            max_phase, scan_type = 4, 'comprehensive'
-
-        return {
-            'action': 'scan', 'target': target,
-            'scan_type': scan_type, 'max_phase': max_phase,
-            'no_vuln': False, 'no_dos': False, 'ports': None,
-        }
+    # ── AI Chat (streaming via SocketIO) ──────────────────────
 
     @socketio.on("chat_message")
     def handle_chat_message(data):
@@ -96,42 +84,26 @@ def create_app():
         if not message:
             return
 
-        # Reject if AI is already streaming a response — prevents race conditions
         if not _ai_stream_lock.acquire(blocking=False):
             socketio.emit("ai_response", {
-                "token": "⏳ Please wait — I'm still processing the previous message.",
+                "token": "⏳ Please wait — still processing the previous message.",
                 "done": True,
             })
             return
 
         try:
-            if not ai.is_available():
+            if not ai.is_available:
                 socketio.emit("ai_response", {
-                    "token": "⚠️ Ollama is not available. Make sure Ollama is running:\n\n"
-                             "`sudo systemctl start ollama` or `ollama serve`",
+                    "token": "⚠️ No AI backend available. Go to **Settings** to configure your OpenRouter API key, or start Ollama locally.",
                     "done": True,
                 })
                 _ai_stream_lock.release()
                 return
 
-            # Step 1: Quick scan-intent detection (instant, no AI call)
-            scan_params = _quick_scan_detect(message)
-            if scan_params and not scanner.is_running:
-                target = scan_params['target']
-                socketio.emit("scan_detected", scan_params)
-                scanner.start_scan(
-                    target=target,
-                    max_phase=scan_params.get('max_phase', 2),
-                    no_vuln=scan_params.get('no_vuln', False),
-                    no_dos=scan_params.get('no_dos', False),
-                    ports=scan_params.get('ports'),
-                )
-
-            # Step 2: Stream AI response
+            # Build context from any running/completed command output
             context = ""
-            if scanner.state.scan_result:
-                results = scanner.get_results_for_ai()
-                context = f"Current scan results:\n{json.dumps(results, indent=2, default=str)}"
+            if _cmd_process.get("last_output"):
+                context = f"Last command output:\n```\n{_cmd_process['last_output'][-3000:]}\n```"
 
             def stream():
                 try:
@@ -139,6 +111,12 @@ def create_app():
                         socketio.emit("ai_response", {"token": token, "done": False})
                         socketio.sleep(0)
                     socketio.emit("ai_response", {"token": "", "done": True})
+                    # Emit model status update (in case model switched due to fallback)
+                    socketio.emit("status_update", {
+                        "backend": ai.backend,
+                        "model": ai.current_model,
+                        "status": ai.status_message,
+                    })
                 finally:
                     _ai_stream_lock.release()
 
@@ -147,72 +125,90 @@ def create_app():
             _ai_stream_lock.release()
             raise
 
-    # ── AI Chat fallback (HTTP — kept for API access) ────────────
+    # ── Execute nmap command ──────────────────────────────────
 
-    @app.route("/api/chat", methods=["POST"])
-    def api_chat():
-        """HTTP fallback — not used by the GUI (which uses SocketIO)."""
-        data = request.get_json() or {}
-        message = data.get("message", "").strip()
-        if not message:
-            return jsonify({"error": "Empty message"}), 400
-        if not ai.is_available():
-            return jsonify({"action": "chat", "message": "⚠️ Ollama offline"}), 200
-        result = ai.parse_scan_request(message)
-        result["raw_response"] = result.get("message", "")
-        return jsonify(result)
+    @socketio.on("execute_command")
+    def handle_execute_command(data):
+        cmd = data.get("cmd", "").strip()
+        if not cmd:
+            socketio.emit("command_error", {"error": "Empty command"})
+            return
 
-    # ── Scan Control ─────────────────────────────────────────────
+        # Security: only allow nmap commands
+        if not cmd.startswith("nmap ") and cmd != "nmap":
+            socketio.emit("command_error", {"error": "Only nmap commands are allowed"})
+            return
 
-    @app.route("/api/scan/start", methods=["POST"])
-    def api_scan_start():
-        data = request.get_json() or {}
-        target = data.get("target", "").strip()
+        if _cmd_process["running"]:
+            socketio.emit("command_error", {"error": "A command is already running"})
+            return
 
-        if not target:
-            return jsonify({"error": "No target specified"}), 400
+        def run_command():
+            _cmd_process["running"] = True
+            _cmd_process["last_output"] = ""
+            output_lines = []
 
-        if scanner.is_running:
-            return jsonify({"error": "A scan is already running"}), 409
+            socketio.emit("command_started", {"cmd": cmd})
 
-        result = scanner.start_scan(
-            target=target,
-            max_phase=data.get("max_phase", 2),
-            no_vuln=data.get("no_vuln", False),
-            no_dos=data.get("no_dos", False),
-            ports=data.get("ports"),
-        )
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                )
+                _cmd_process["proc"] = proc
 
-        return jsonify(result)
+                for line in iter(proc.stdout.readline, ''):
+                    line = line.rstrip('\n')
+                    if line:
+                        output_lines.append(line)
+                        socketio.emit("command_output", {"line": line})
+                        socketio.sleep(0)
 
-    @app.route("/api/scan/status")
-    def api_scan_status():
-        return jsonify(scanner.state.to_dict())
+                proc.wait()
+                exit_code = proc.returncode
 
-    @app.route("/api/scan/results")
-    def api_scan_results():
-        return jsonify(scanner.state.to_dict())
+                full_output = "\n".join(output_lines)
+                _cmd_process["last_output"] = full_output
+
+                socketio.emit("command_complete", {
+                    "exit_code": exit_code,
+                    "line_count": len(output_lines),
+                })
+
+            except Exception as e:
+                socketio.emit("command_error", {"error": str(e)})
+            finally:
+                _cmd_process["running"] = False
+                _cmd_process["proc"] = None
+
+        socketio.start_background_task(run_command)
+
+    @socketio.on("stop_command")
+    def handle_stop_command():
+        proc = _cmd_process.get("proc")
+        if proc and _cmd_process["running"]:
+            try:
+                proc.terminate()
+                socketio.emit("command_output", {"line": "⚠️ Command terminated by user"})
+            except Exception:
+                pass
 
     # ── AI Analysis ──────────────────────────────────────────────
 
     @app.route("/api/analyze", methods=["POST"])
     def api_analyze():
-        if not scanner.state.scan_result:
-            return jsonify({"error": "No scan results to analyze"}), 400
-
-        if not ai.is_available():
-            return jsonify({"error": "Ollama is not available"}), 503
-
-        results = scanner.get_results_for_ai()
-        analysis = ai.analyze_results(results)
-
+        data = request.get_json() or {}
+        results = data.get("results", "")
+        if not results:
+            return jsonify({"error": "No data to analyze"}), 400
+        if not ai.is_available:
+            return jsonify({"error": "No AI backend available"}), 503
+        analysis = ai.analyze_results(results if isinstance(results, dict) else {"raw": results})
         return jsonify({"analysis": analysis})
-
-    # ── History ──────────────────────────────────────────────────
-
-    @app.route("/api/history")
-    def api_history():
-        return jsonify({"history": scan_history})
 
     # ── AI Reset ─────────────────────────────────────────────────
 
@@ -227,15 +223,23 @@ def create_app():
 
     @socketio.on("connect")
     def handle_connect():
+        ai.initialize()
         emit("connected", {
             "version": __version__,
-            "ai_available": ai.is_available(),
-            "model": ai.model,
+            "ai_available": ai.is_available,
+            "backend": ai.backend,
+            "model": ai.current_model,
+            "status": ai.status_message,
         })
 
     @socketio.on("request_status")
     def handle_request_status():
-        emit("scan_progress", scanner.state.to_dict())
+        emit("status_update", {
+            "backend": ai.backend,
+            "model": ai.current_model,
+            "status": ai.status_message,
+            "command_running": _cmd_process["running"],
+        })
 
     return app, socketio
 
@@ -248,13 +252,17 @@ def run_server(host="0.0.0.0", port=1337, debug=False):
     """Start the NmapPilot web server."""
     app, socketio = create_app()
 
+    # Initialize AI to show status at startup
+    ai_temp = AIEngine()
+    ai_temp.initialize()
+
     print(f"""
   ╔═══════════════════════════════════════════════════════════╗
   ║  NmapPilot AI GUI                                        ║
   ║  ───────────────────────────────────────────────────────  ║
-  ║  Server:  http://{host}:{port}                          ║
-  ║  Local:   http://127.0.0.1:{port}                       ║
-  ║  AI:      {'✔ Ollama connected' :42s}║
+  ║  Server:  http://{host}:{port:<36s}║
+  ║  Local:   http://127.0.0.1:{port:<29s}║
+  ║  AI:      {ai_temp.status_message:<42s}║
   ╚═══════════════════════════════════════════════════════════╝
 """)
 

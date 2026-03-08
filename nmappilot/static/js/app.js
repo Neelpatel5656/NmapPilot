@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
-   NmapPilot AI — Client-Side Application (v3 — Fixed)
+   NmapPilot AI — Client-Side Application (v4 — Command-Based)
    ═══════════════════════════════════════════════════════════════ */
 
 // ── State ──
@@ -7,9 +7,9 @@ let socket = null;
 let isWaitingForAI = false;
 let currentStreamMsg = null;
 let currentStreamRaw = '';
-let scanHistory = [];
-let liveProgressEl = null;
 let aiTimeoutTimer = null;
+let commandRunning = false;
+let currentCmdOutput = null;
 
 // ── Initialize ──
 document.addEventListener('DOMContentLoaded', () => {
@@ -17,6 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initNavigation();
     initChatInput();
     checkStatus();
+    loadSettings();
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -26,34 +27,65 @@ document.addEventListener('DOMContentLoaded', () => {
 function initSocket() {
     socket = io({ transports: ['polling'] });
 
-    socket.on('connect', () => updateAIStatus('connected', 'AI Online'));
+    socket.on('connect', () => updateAIStatus('connected', 'Connected'));
     socket.on('disconnect', () => updateAIStatus('disconnected', 'Disconnected'));
 
     socket.on('connected', (data) => {
         updateAIStatus(data.ai_available ? 'connected' : 'disconnected',
-                       data.ai_available ? data.model : 'Ollama offline');
-    });
-
-    socket.on('scan_progress', (data) => {
-        updateScanProgress(data);
-        updateLiveProgressCard(data);
-    });
-
-    socket.on('scan_output', (data) => {
-        appendTerminal(data.line);
-        appendLiveOutput(data.line);
+                       data.ai_available ? data.model : 'No AI configured');
+        if (data.status) updateStatusText(data.status);
     });
 
     socket.on('ai_response', (data) => handleAIStream(data));
 
-    socket.on('scan_detected', (data) => {
-        if (data.target) {
-            insertLiveProgressCard(data.target);
-            showToast(`🚀 Scan launched: ${data.target}`, 'info');
+    socket.on('status_update', (data) => {
+        updateAIStatus(data.backend !== 'none' ? 'connected' : 'disconnected',
+                       data.model || 'No AI');
+        updateStatusText(data.status || '');
+    });
+
+    // Command execution events
+    socket.on('command_started', (data) => {
+        commandRunning = true;
+        appendTerminal(`\n▶ Running: ${data.cmd}`, 'system');
+        if (currentCmdOutput) {
+            const badge = currentCmdOutput.querySelector('.cmd-exec-badge');
+            if (badge) { badge.textContent = 'RUNNING'; badge.className = 'cmd-exec-badge running'; }
         }
     });
 
-    // Reconnect safety
+    socket.on('command_output', (data) => {
+        appendTerminal(data.line);
+        appendCmdOutputLine(data.line);
+    });
+
+    socket.on('command_complete', (data) => {
+        commandRunning = false;
+        const status = data.exit_code === 0 ? 'COMPLETE' : `EXIT: ${data.exit_code}`;
+        appendTerminal(`✔ Command finished (${status})`, 'success');
+        if (currentCmdOutput) {
+            const badge = currentCmdOutput.querySelector('.cmd-exec-badge');
+            if (badge) {
+                badge.textContent = status;
+                badge.className = 'cmd-exec-badge ' + (data.exit_code === 0 ? 'complete' : 'error');
+            }
+            const stopBtn = currentCmdOutput.querySelector('.cmd-stop-btn');
+            if (stopBtn) stopBtn.style.display = 'none';
+        }
+        currentCmdOutput = null;
+    });
+
+    socket.on('command_error', (data) => {
+        commandRunning = false;
+        appendTerminal(`✘ Error: ${data.error}`, 'error');
+        showToast(data.error, 'error');
+        if (currentCmdOutput) {
+            const badge = currentCmdOutput.querySelector('.cmd-exec-badge');
+            if (badge) { badge.textContent = 'ERROR'; badge.className = 'cmd-exec-badge error'; }
+        }
+        currentCmdOutput = null;
+    });
+
     socket.on('reconnect', () => {
         resetWaitingState();
         updateAIStatus('connected', 'Reconnected');
@@ -63,8 +95,13 @@ function initSocket() {
 function updateAIStatus(state, text) {
     const dot = document.getElementById('status-dot');
     const txt = document.getElementById('status-text');
-    dot.className = 'status-dot ' + state;
-    txt.textContent = text;
+    if (dot) dot.className = 'status-dot ' + state;
+    if (txt) txt.textContent = text;
+}
+
+function updateStatusText(text) {
+    const el = document.getElementById('status-detail');
+    if (el) el.textContent = text;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -117,16 +154,14 @@ function sendMessage() {
     document.getElementById('send-btn').disabled = true;
     showTypingIndicator();
 
-    // Safety timeout — if nothing comes back in 60s, unlock the UI
     clearTimeout(aiTimeoutTimer);
     aiTimeoutTimer = setTimeout(() => {
         if (isWaitingForAI) {
             resetWaitingState();
-            addMessage('ai', '⚠️ The AI took too long to respond. The model may still be loading — please try again.');
+            addMessage('ai', '⚠️ The AI took too long to respond. Try again or check Settings.', true);
         }
-    }, 60000);
+    }, 120000);
 
-    // Send via SocketIO — streaming, no HTTP timeout
     socket.emit('chat_message', { message });
 }
 
@@ -166,22 +201,11 @@ function renderMarkdown(text) {
     if (typeof marked !== 'undefined') {
         try { return marked.parse(text); } catch(e) { /* fall through */ }
     }
-    return escapeHtml(text);
-}
-
-// Clean AI response — strip JSON scan blocks the AI outputs
-function cleanAIResponse(text) {
-    // Remove ```json {...} ``` blocks that contain "action": "scan"
-    let cleaned = text.replace(/```json\s*\n?\s*\{[^`]*"action"\s*:\s*"scan"[^`]*\}\s*\n?\s*```/gs, '');
-    // Remove bare JSON objects with scan action
-    cleaned = cleaned.replace(/\{[^{}]*"action"\s*:\s*"scan"[^{}]*\}/g, '');
-    // Clean up leftover extra blank lines
-    cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
-    return cleaned || text;
+    return escapeHtml(text).replace(/\n/g, '<br>');
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  Chat — Streaming AI Response
+//  Chat — AI Streaming + Command Card Extraction
 // ═══════════════════════════════════════════════════════════════
 
 function handleAIStream(data) {
@@ -196,34 +220,176 @@ function handleAIStream(data) {
         currentStreamMsg.innerHTML = `
             <div class="msg-row">
                 <div class="message-avatar">🤖</div>
-                <div class="message-bubble stream-bubble"></div>
+                <div class="message-content-wrap">
+                    <div class="message-bubble stream-bubble"></div>
+                    <div class="command-cards-container"></div>
+                </div>
             </div>
         `;
         messages.appendChild(currentStreamMsg);
         currentStreamRaw = '';
     }
 
-    // Append token
     if (data.token) {
         currentStreamRaw += data.token;
     }
 
-    // Update rendered content
+    // Live update the explanation part (strip JSON blocks)
     if (currentStreamMsg) {
         const bubble = currentStreamMsg.querySelector('.stream-bubble');
         if (bubble) {
-            const cleaned = cleanAIResponse(currentStreamRaw);
+            const cleaned = stripCommandJSON(currentStreamRaw);
             bubble.innerHTML = renderMarkdown(cleaned);
         }
         scrollChatToBottom();
     }
 
-    // Done — finalize
+    // Done — finalize, extract command cards
     if (data.done) {
+        if (currentStreamMsg) {
+            // Extract and render command cards
+            const commands = extractCommands(currentStreamRaw);
+            if (commands.length > 0) {
+                const container = currentStreamMsg.querySelector('.command-cards-container');
+                if (container) {
+                    container.innerHTML = commands.map((c, i) => buildCommandCard(c, i)).join('');
+                }
+            }
+
+            // Clean up the explanation text (remove JSON blocks)
+            const bubble = currentStreamMsg.querySelector('.stream-bubble');
+            if (bubble) {
+                const cleaned = stripCommandJSON(currentStreamRaw);
+                bubble.innerHTML = renderMarkdown(cleaned);
+            }
+        }
         currentStreamMsg = null;
         currentStreamRaw = '';
         resetWaitingState();
     }
+}
+
+function extractCommands(text) {
+    const commands = [];
+    // Match ```json blocks containing "commands"
+    const jsonBlocks = text.match(/```json\s*\n?([\s\S]*?)\n?\s*```/g);
+    if (jsonBlocks) {
+        for (const block of jsonBlocks) {
+            const inner = block.replace(/```json\s*\n?/, '').replace(/\n?\s*```/, '');
+            try {
+                const parsed = JSON.parse(inner);
+                if (parsed.commands && Array.isArray(parsed.commands)) {
+                    for (const cmd of parsed.commands) {
+                        if (cmd.cmd) {
+                            commands.push({
+                                cmd: cmd.cmd,
+                                description: cmd.description || '',
+                            });
+                        }
+                    }
+                }
+            } catch (e) { /* not valid JSON, skip */ }
+        }
+    }
+    return commands;
+}
+
+function stripCommandJSON(text) {
+    // Remove ```json blocks that contain "commands"
+    let cleaned = text.replace(/```json\s*\n?\s*\{[\s\S]*?"commands"[\s\S]*?\}\s*\n?\s*```/g, '');
+    // Clean up extra whitespace
+    cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
+    return cleaned || text;
+}
+
+function buildCommandCard(cmd, index) {
+    const escapedCmd = escapeHtml(cmd.cmd);
+    const escapedDesc = escapeHtml(cmd.description);
+    return `
+        <div class="command-card" id="cmd-card-${index}">
+            <div class="command-card-header">
+                <span class="command-card-icon">⚡</span>
+                <span class="command-card-desc">${escapedDesc}</span>
+            </div>
+            <div class="command-card-body">
+                <code class="command-text">${escapedCmd}</code>
+            </div>
+            <div class="command-card-actions">
+                <button class="cmd-run-btn" onclick="runCommand('${escapedCmd.replace(/'/g, "\\'")}', this)">
+                    <span>▶</span> Run
+                </button>
+                <button class="cmd-copy-btn" onclick="copyCommand('${escapedCmd.replace(/'/g, "\\'")}')">
+                    <span>📋</span> Copy
+                </button>
+            </div>
+        </div>
+    `;
+}
+
+function runCommand(cmd, btn) {
+    if (commandRunning) {
+        showToast('A command is already running', 'warning');
+        return;
+    }
+
+    // Create inline output area
+    const card = btn.closest('.command-card');
+    let outputArea = card.querySelector('.cmd-output-area');
+    if (!outputArea) {
+        outputArea = document.createElement('div');
+        outputArea.className = 'cmd-output-area';
+        outputArea.innerHTML = `
+            <div class="cmd-output-header">
+                <span class="cmd-exec-badge running">RUNNING</span>
+                <button class="cmd-stop-btn" onclick="stopCommand()">⬜ Stop</button>
+            </div>
+            <div class="cmd-output-lines"></div>
+        `;
+        card.appendChild(outputArea);
+    } else {
+        outputArea.querySelector('.cmd-output-lines').innerHTML = '';
+        const badge = outputArea.querySelector('.cmd-exec-badge');
+        if (badge) { badge.textContent = 'RUNNING'; badge.className = 'cmd-exec-badge running'; }
+        const stopBtn = outputArea.querySelector('.cmd-stop-btn');
+        if (stopBtn) stopBtn.style.display = '';
+    }
+
+    currentCmdOutput = outputArea;
+    btn.disabled = true;
+
+    socket.emit('execute_command', { cmd: cmd });
+    showToast(`▶ Running: ${cmd.substring(0, 50)}...`, 'info');
+}
+
+function stopCommand() {
+    socket.emit('stop_command');
+}
+
+function copyCommand(cmd) {
+    navigator.clipboard.writeText(cmd).then(() => {
+        showToast('Command copied!', 'success');
+    }).catch(() => {
+        // Fallback
+        const ta = document.createElement('textarea');
+        ta.value = cmd; document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); document.body.removeChild(ta);
+        showToast('Command copied!', 'success');
+    });
+}
+
+function appendCmdOutputLine(line) {
+    if (!currentCmdOutput) return;
+    const container = currentCmdOutput.querySelector('.cmd-output-lines');
+    if (!container) return;
+    const div = document.createElement('div');
+    div.className = 'cmd-output-line';
+    if (line.includes('open')) div.className += ' highlight-open';
+    else if (line.includes('closed') || line.includes('filtered')) div.className += ' highlight-closed';
+    else if (line.startsWith('|') || line.startsWith('PORT')) div.className += ' highlight-header';
+    div.textContent = line;
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+    scrollChatToBottom();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -278,333 +444,153 @@ function resetChat() {
         const welcome = messages.querySelector('.welcome-msg');
         messages.innerHTML = '';
         if (welcome) messages.appendChild(welcome);
-        liveProgressEl = null;
+        currentCmdOutput = null;
         resetWaitingState();
         showToast('Conversation reset', 'info');
     });
 }
 
-
 // ═══════════════════════════════════════════════════════════════
-//  LIVE PROGRESS CARD
-// ═══════════════════════════════════════════════════════════════
-
-function insertLiveProgressCard(target) {
-    if (liveProgressEl) liveProgressEl.remove();
-    const messages = document.getElementById('chat-messages');
-    const card = document.createElement('div');
-    card.className = 'live-progress-card';
-    card.id = 'live-progress-card';
-    card.innerHTML = `
-        <div class="live-progress-header">
-            <div class="live-progress-title">
-                <div class="pulse-ring"></div>
-                <span>Live Scan</span>
-            </div>
-            <span class="live-badge scanning" id="live-badge">INITIALIZING</span>
-        </div>
-        <div class="live-progress-body">
-            <div class="live-target" id="live-target">${escapeHtml(target)}</div>
-            <div class="live-bar-track">
-                <div class="live-bar-fill" id="live-bar" style="width: 2%"></div>
-            </div>
-            <div class="live-stats">
-                <span class="live-percent" id="live-percent">0%</span>
-                <span class="live-task" id="live-task">Validating target...</span>
-            </div>
-            <div class="live-metrics" id="live-metrics">
-                <div class="live-metric"><span class="live-metric-val" id="lm-ports">—</span><span class="live-metric-label">ports</span></div>
-                <div class="live-metric"><span class="live-metric-val" id="lm-svcs">—</span><span class="live-metric-label">services</span></div>
-                <div class="live-metric"><span class="live-metric-val" id="lm-vulns">—</span><span class="live-metric-label">vulns</span></div>
-                <div class="live-metric"><span class="live-metric-val" id="lm-exploits">—</span><span class="live-metric-label">exploits</span></div>
-            </div>
-            <div class="live-output-lines" id="live-output"></div>
-        </div>
-    `;
-    messages.appendChild(card);
-    liveProgressEl = card;
-    scrollChatToBottom();
-}
-
-function updateLiveProgressCard(data) {
-    if (!liveProgressEl) return;
-    const badge = document.getElementById('live-badge');
-    if (badge) { badge.textContent = data.status.toUpperCase(); badge.className = 'live-badge ' + data.status; }
-
-    const targetEl = document.getElementById('live-target');
-    if (targetEl && data.target_info) targetEl.textContent = data.target_info.hostname || data.target_info.ip;
-
-    const bar = document.getElementById('live-bar');
-    if (bar) bar.style.width = Math.max(2, data.progress) + '%';
-
-    const pct = document.getElementById('live-percent');
-    if (pct) pct.textContent = Math.round(data.progress) + '%';
-
-    const task = document.getElementById('live-task');
-    if (task) task.textContent = data.current_task || '';
-
-    if (data.scan_result) {
-        const p = document.getElementById('lm-ports'); if (p) p.textContent = data.scan_result.open_port_count || 0;
-        const s = document.getElementById('lm-svcs'); if (s) s.textContent = (data.scan_result.all_services || []).length;
-    }
-    const v = document.getElementById('lm-vulns'); if (v) v.textContent = (data.vuln_findings || []).length;
-    const e = document.getElementById('lm-exploits'); if (e) e.textContent = (data.exploits || []).length;
-
-    scrollChatToBottom();
-
-    if (data.status === 'complete') finalizeLiveCard(data, false);
-    else if (data.status === 'error') finalizeLiveCard(data, true);
-}
-
-function appendLiveOutput(line) {
-    if (!liveProgressEl) return;
-    const output = document.getElementById('live-output');
-    if (!output) return;
-    const div = document.createElement('div');
-    div.className = 'live-output-line';
-    if (line.includes('✔')) div.className += ' ok';
-    else if (line.includes('⚠')) div.className += ' warn';
-    else if (line.includes('✘') || line.includes('Error')) div.className += ' err';
-    else if (line.includes('⟳') || line.includes('Running')) div.className += ' scan';
-    div.textContent = line;
-    output.appendChild(div);
-    while (output.children.length > 6) output.removeChild(output.firstChild);
-    output.scrollTop = output.scrollHeight;
-}
-
-function finalizeLiveCard(data, isError) {
-    if (!liveProgressEl) return;
-    const pulse = liveProgressEl.querySelector('.pulse-ring');
-    if (pulse) pulse.style.animation = 'none';
-
-    if (!isError && data.scan_result) {
-        const ports = data.scan_result.open_port_count || 0;
-        const vulns = (data.vuln_findings || []).length;
-        const exploits = (data.exploits || []).length;
-        const target = data.target_info ? (data.target_info.hostname || data.target_info.ip) : '';
-        setTimeout(() => {
-            addMessage('ai', `**Scan complete: ${escapeHtml(target)}** — ` +
-                `${ports} open ports, ${vulns} vulns, ${exploits} exploits found.\n\n` +
-                `Go to **Results** tab for details, or ask me to analyze the findings.`, true);
-            showToast('✔ Scan complete!', 'success');
-        }, 500);
-        addToHistory(target, data);
-    }
-    if (isError) {
-        setTimeout(() => {
-            addMessage('ai', `⚠️ **Scan Error:** ${data.error_message || 'Unknown error'}`, true);
-        }, 300);
-    }
-    liveProgressEl = null;
-}
-
-
-// ═══════════════════════════════════════════════════════════════
-//  Scan Progress (Dashboard)
+//  Terminal Panel
 // ═══════════════════════════════════════════════════════════════
 
-function updateScanProgress(data) {
-    const badge = document.getElementById('scan-status-badge');
-    badge.textContent = data.status.toUpperCase();
-    badge.className = 'status-badge ' + data.status;
-
-    const targetDisplay = document.getElementById('target-display');
-    if (data.target_info) {
-        targetDisplay.innerHTML = `
-            <div class="target-value">${escapeHtml(data.target_info.hostname || data.target_info.ip)}</div>
-            <div class="target-label">${escapeHtml(data.target_info.ip || '')}</div>
-        `;
-    }
-
-    const pc = document.getElementById('progress-container');
-    if (data.status !== 'idle') {
-        pc.style.display = 'block';
-        document.getElementById('progress-fill').style.width = data.progress + '%';
-        document.getElementById('progress-text').textContent = Math.round(data.progress) + '%';
-        document.getElementById('progress-task').textContent = data.current_task || '';
-    }
-
-    if (data.scan_result) {
-        document.getElementById('stat-ports').textContent = data.scan_result.open_port_count || 0;
-        document.getElementById('stat-services').textContent = (data.scan_result.all_services || []).length;
-    }
-    document.getElementById('stat-vulns').textContent = (data.vuln_findings || []).length;
-    document.getElementById('stat-exploits').textContent = (data.exploits || []).length;
-
-    if (data.status === 'complete') renderResults(data);
-}
-
-
-// ═══════════════════════════════════════════════════════════════
-//  Results Rendering
-// ═══════════════════════════════════════════════════════════════
-
-function renderResults(data) {
-    document.getElementById('results-empty').style.display = 'none';
-    if (data.scan_result && data.scan_result.all_ports) {
-        const openPorts = data.scan_result.all_ports.filter(p => p.state === 'open');
-        if (openPorts.length > 0) {
-            const tbody = document.getElementById('ports-tbody');
-            tbody.innerHTML = '';
-            openPorts.sort((a, b) => parseInt(a.port_id) - parseInt(b.port_id)).forEach(port => {
-                const svc = port.service || {};
-                const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td class="port-num">${escapeHtml(port.port_id)}/${escapeHtml(port.protocol)}</td>
-                    <td class="state-open">${escapeHtml(port.state)}</td>
-                    <td class="service-name">${escapeHtml(svc.name || '—')}</td>
-                    <td class="product-name">${escapeHtml(svc.product || '—')}</td>
-                    <td>${escapeHtml(svc.version || '—')}</td>
-                `;
-                tbody.appendChild(tr);
-            });
-            document.getElementById('ports-section').style.display = 'block';
-        }
-    }
-    if (data.vuln_findings && data.vuln_findings.length > 0) {
-        renderFindings(data.vuln_findings, 'vulns');
-        document.getElementById('vulns-section').style.display = 'block';
-    }
-    if (data.exploits && data.exploits.length > 0) {
-        renderExploits(data.exploits);
-        document.getElementById('exploits-section').style.display = 'block';
-    }
-}
-
-function renderFindings(findings, prefix) {
-    const counts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, INFO: 0 };
-    findings.forEach(f => { counts[f.severity] = (counts[f.severity] || 0) + 1; });
-    const summary = document.getElementById('severity-summary');
-    summary.innerHTML = Object.entries(counts).filter(([_, v]) => v > 0)
-        .map(([s, c]) => `<span class="severity-badge ${s.toLowerCase()}">${s}: ${c}</span>`).join('');
-    const list = document.getElementById(`${prefix}-list`);
-    list.innerHTML = '';
-    findings.forEach(f => {
-        const card = document.createElement('div');
-        card.className = `finding-card severity-${f.severity.toLowerCase()}`;
-        card.innerHTML = `
-            <div class="finding-header" onclick="toggleFinding(this)">
-                <span class="finding-severity ${f.severity.toLowerCase()}">${escapeHtml(f.severity)}</span>
-                <span class="finding-title">${escapeHtml(f.title)}</span>
-                ${f.port ? `<span class="finding-port">:${escapeHtml(f.port)}</span>` : ''}
-                <span class="finding-toggle">▼</span>
-            </div>
-            <div class="finding-details">${escapeHtml(f.details || 'No details')}
-${f.cve && f.cve.length ? f.cve.map(c => `<span class="cve-tag">${escapeHtml(c)}</span>`).join('') : ''}</div>
-        `;
-        list.appendChild(card);
-    });
-}
-
-function renderExploits(exploits) {
-    const list = document.getElementById('exploits-list');
-    list.innerHTML = '';
-    exploits.forEach(exp => {
-        const card = document.createElement('div');
-        card.className = 'finding-card severity-high';
-        card.innerHTML = `
-            <div class="finding-header" onclick="toggleFinding(this)">
-                <span class="finding-severity high">EXPLOIT</span>
-                <span class="finding-title">${escapeHtml(exp.title)}</span>
-                ${exp.port ? `<span class="finding-port">:${escapeHtml(exp.port)}</span>` : ''}
-                <span class="finding-toggle">▼</span>
-            </div>
-            <div class="finding-details">Service: ${escapeHtml(exp.service || '—')} | Type: ${escapeHtml(exp.exploit_type || '—')} | Platform: ${escapeHtml(exp.platform || '—')}\nPath: ${escapeHtml(exp.path || '—')}</div>
-        `;
-        list.appendChild(card);
-    });
-}
-
-function toggleFinding(header) { header.parentElement.classList.toggle('expanded'); }
-
-
-// ═══════════════════════════════════════════════════════════════
-//  Manual / Quick Scan
-// ═══════════════════════════════════════════════════════════════
-
-function startManualScan() {
-    const target = document.getElementById('manual-target').value.trim();
-    if (!target) { showToast('Enter a target first', 'warning'); return; }
-    const data = {
-        target,
-        max_phase: parseInt(document.getElementById('manual-phase').value),
-        no_vuln: document.getElementById('manual-no-vuln').checked,
-        no_dos: document.getElementById('manual-no-dos').checked,
-    };
-    document.getElementById('manual-scan-btn').disabled = true;
-    fetch('/api/scan/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
-    .then(r => r.json()).then(result => {
-        document.getElementById('manual-scan-btn').disabled = false;
-        if (result.error) showToast(result.error, 'error');
-        else { showToast(`🚀 Scan: ${target}`, 'success'); switchPanel('chat'); insertLiveProgressCard(target); }
-    }).catch(e => { document.getElementById('manual-scan-btn').disabled = false; showToast(e.message, 'error'); });
-}
-
-function quickScan(type) {
-    const target = prompt('Enter target IP or hostname:');
-    if (!target) return;
-    const phaseMap = { quick: 1, aggressive: 3, comprehensive: 4 };
-    fetch('/api/scan/start', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target: target.trim(), max_phase: phaseMap[type] || 2 }) })
-    .then(r => r.json()).then(result => {
-        if (result.error) showToast(result.error, 'error');
-        else { showToast(`🚀 ${type} scan: ${target}`, 'success'); switchPanel('chat'); insertLiveProgressCard(target.trim()); }
-    }).catch(e => showToast(e.message, 'error'));
-}
-
-
-// ═══════════════════════════════════════════════════════════════
-//  AI Analysis
-// ═══════════════════════════════════════════════════════════════
-
-function analyzeResults() {
-    const btn = document.getElementById('btn-analyze');
-    btn.disabled = true; btn.innerHTML = '<span>⏳</span> Analyzing...';
-    fetch('/api/analyze', { method: 'POST' }).then(r => r.json()).then(data => {
-        btn.disabled = false; btn.innerHTML = '<span>🤖</span> Analyze';
-        if (data.error) { showToast(data.error, 'error'); return; }
-        const section = document.getElementById('ai-analysis-section');
-        const content = document.getElementById('ai-analysis-content');
-        content.innerHTML = renderMarkdown(data.analysis || 'No analysis');
-        section.style.display = 'block';
-        section.scrollIntoView({ behavior: 'smooth' });
-        showToast('AI analysis ready', 'success');
-    }).catch(e => { btn.disabled = false; btn.innerHTML = '<span>🤖</span> Analyze'; showToast(e.message, 'error'); });
-}
-
-
-// ═══════════════════════════════════════════════════════════════
-//  Terminal / History / Status / Toast / Utility
-// ═══════════════════════════════════════════════════════════════
-
-function appendTerminal(line) {
+function appendTerminal(line, type = '') {
     const t = document.getElementById('terminal-output');
+    if (!t) return;
     const div = document.createElement('div');
     div.className = 'terminal-line';
-    if (line.includes('✔')) div.className += ' success';
+    if (type) div.className += ' ' + type;
+    else if (line.includes('open')) div.className += ' success';
+    else if (line.includes('✔')) div.className += ' success';
     else if (line.includes('⚠')) div.className += ' warning';
     else if (line.includes('✘') || line.includes('Error')) div.className += ' error';
-    else if (line.includes('⟳')) div.className += ' system';
+    else if (line.includes('⟳') || line.startsWith('▶')) div.className += ' system';
     div.textContent = line;
-    t.appendChild(div); t.scrollTop = t.scrollHeight;
+    t.appendChild(div);
+    t.scrollTop = t.scrollHeight;
 }
 
-function clearTerminal() { document.getElementById('terminal-output').innerHTML = '<div class="terminal-line system">Terminal cleared</div>'; }
+function clearTerminal() {
+    document.getElementById('terminal-output').innerHTML =
+        '<div class="terminal-line system">NmapPilot AI Terminal — Ready</div>';
+}
 
-function addToHistory(target, data) {
-    scanHistory.unshift({ target, time: new Date().toLocaleTimeString(), data });
-    const c = document.getElementById('scan-history'); c.innerHTML = '';
-    scanHistory.slice(0, 10).forEach(h => {
-        const div = document.createElement('div'); div.className = 'history-item';
-        div.innerHTML = `<div class="history-target">${escapeHtml(h.target)}</div><div class="history-time">${h.time}</div>`;
-        div.onclick = () => { renderResults(h.data); switchPanel('results'); };
-        c.appendChild(div);
+function sendTerminalCommand() {
+    const input = document.getElementById('terminal-input');
+    if (!input) return;
+    const cmd = input.value.trim();
+    if (!cmd) return;
+    input.value = '';
+
+    if (!cmd.startsWith('nmap')) {
+        appendTerminal('⚠ Only nmap commands are allowed', 'warning');
+        return;
+    }
+
+    if (commandRunning) {
+        appendTerminal('⚠ A command is already running', 'warning');
+        return;
+    }
+
+    socket.emit('execute_command', { cmd });
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Settings Panel
+// ═══════════════════════════════════════════════════════════════
+
+function loadSettings() {
+    fetch('/api/config').then(r => r.json()).then(cfg => {
+        const keyInput = document.getElementById('settings-api-key');
+        if (keyInput && cfg.api_key_preview) keyInput.placeholder = cfg.api_key_set ? `Current: ${cfg.api_key_preview}` : 'sk-or-v1-...';
+
+        const modelSelect = document.getElementById('settings-model');
+        if (modelSelect && cfg.free_models) {
+            modelSelect.innerHTML = '<option value="">Auto (best available)</option>';
+            cfg.free_models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m;
+                opt.textContent = m;
+                if (m === cfg.preferred_model) opt.selected = true;
+                modelSelect.appendChild(opt);
+            });
+        }
+
+        const backendBadge = document.getElementById('settings-backend');
+        if (backendBadge) {
+            backendBadge.textContent = cfg.backend === 'openrouter' ? `OpenRouter: ${cfg.current_model}` :
+                                       cfg.backend === 'ollama' ? `Ollama: ${cfg.ollama_model}` : 'Not configured';
+            backendBadge.className = 'settings-badge ' + (cfg.backend !== 'none' ? 'active' : 'inactive');
+        }
+    }).catch(() => {});
+}
+
+function saveApiKey() {
+    const input = document.getElementById('settings-api-key');
+    const key = input.value.trim();
+    if (!key) { showToast('Enter an API key', 'warning'); return; }
+
+    const btn = document.getElementById('save-key-btn');
+    btn.disabled = true; btn.textContent = 'Saving...';
+
+    fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: key }),
+    }).then(r => r.json()).then(cfg => {
+        btn.disabled = false; btn.textContent = 'Save Key';
+        input.value = '';
+        if (cfg.backend === 'openrouter') {
+            showToast(`✔ Connected! Using ${cfg.current_model}`, 'success');
+        } else {
+            showToast('Key saved but could not connect to OpenRouter', 'warning');
+        }
+        loadSettings();
+        checkStatus();
+    }).catch(e => {
+        btn.disabled = false; btn.textContent = 'Save Key';
+        showToast('Failed to save: ' + e.message, 'error');
     });
 }
+
+function savePreferredModel() {
+    const select = document.getElementById('settings-model');
+    const model = select.value;
+
+    fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preferred_model: model }),
+    }).then(r => r.json()).then(cfg => {
+        showToast(`Model set: ${cfg.current_model}`, 'success');
+        checkStatus();
+    }).catch(e => showToast('Failed: ' + e.message, 'error'));
+}
+
+function refreshModels() {
+    const btn = document.getElementById('refresh-models-btn');
+    btn.disabled = true; btn.textContent = '⟳ Fetching...';
+
+    fetch('/api/config/refresh-models', { method: 'POST' })
+    .then(r => r.json()).then(cfg => {
+        btn.disabled = false; btn.textContent = '⟳ Refresh';
+        showToast(`Found ${cfg.free_models.length} free models`, 'success');
+        loadSettings();
+    }).catch(e => {
+        btn.disabled = false; btn.textContent = '⟳ Refresh';
+        showToast('Failed: ' + e.message, 'error');
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Status / Toast / Utility
+// ═══════════════════════════════════════════════════════════════
 
 function checkStatus() {
     fetch('/api/status').then(r => r.json()).then(d => {
-        updateAIStatus(d.ai_available ? 'connected' : 'disconnected', d.ai_available ? d.model : 'Ollama offline');
+        updateAIStatus(d.ai_available ? 'connected' : 'disconnected',
+                       d.ai_available ? d.model : 'No AI configured');
+        if (d.status) updateStatusText(d.status);
     }).catch(() => updateAIStatus('disconnected', 'Server offline'));
 }
 

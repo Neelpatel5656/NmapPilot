@@ -84,6 +84,60 @@ else
 fi
 
 
+# ── OpenRouter API Key Setup ──
+echo ""
+echo -e "${CYAN}${BOLD}  ╔══════════════════════════════════════════╗${RESET}"
+echo -e "${CYAN}${BOLD}  ║    AI Configuration (OpenRouter)         ║${RESET}"
+echo -e "${CYAN}${BOLD}  ╚══════════════════════════════════════════╝${RESET}"
+echo ""
+info "NmapPilot AI uses free models via OpenRouter (no charges)."
+echo ""
+echo -ne "  ${YELLOW}Do you have an OpenRouter API key? [y/n]:${RESET} "
+read -r HAS_KEY
+
+if [ "$HAS_KEY" != "y" ] && [ "$HAS_KEY" != "Y" ]; then
+    echo ""
+    info "  ${BOLD}How to get a free API key:${RESET}"
+    echo -e "  ${DIM}  1. Go to ${CYAN}https://openrouter.ai/${RESET}"
+    echo -e "  ${DIM}  2. Sign up (free — no credit card needed)${RESET}"
+    echo -e "  ${DIM}  3. Go to ${CYAN}https://openrouter.ai/keys${RESET}${DIM} → Create Key${RESET}"
+    echo -e "  ${DIM}  4. Copy the key (starts with sk-or-v1-...)${RESET}"
+    echo ""
+    echo -ne "  ${YELLOW}Enter your API key now (or press Enter to skip):${RESET} "
+    read -r API_KEY
+else
+    echo -ne "  ${YELLOW}Enter your API key:${RESET} "
+    read -r API_KEY
+fi
+
+CONFIG_DIR="$HOME/.config/nmappilot"
+CONFIG_FILE="$CONFIG_DIR/config.json"
+
+if [ -n "$API_KEY" ]; then
+    # Validate key format
+    if [[ "$API_KEY" == sk-or-* ]]; then
+        mkdir -p "$CONFIG_DIR"
+        echo "{\"openrouter_api_key\": \"$API_KEY\"}" > "$CONFIG_FILE"
+        ok "API key saved to $CONFIG_FILE"
+        info "NmapPilot will use free OpenRouter models automatically."
+    else
+        warn "Key doesn't look like an OpenRouter key (expected sk-or-...)."
+        echo -ne "  ${YELLOW}Save it anyway? [y/n]:${RESET} "
+        read -r SAVE_ANYWAY
+        if [ "$SAVE_ANYWAY" = "y" ] || [ "$SAVE_ANYWAY" = "Y" ]; then
+            mkdir -p "$CONFIG_DIR"
+            echo "{\"openrouter_api_key\": \"$API_KEY\"}" > "$CONFIG_FILE"
+            ok "API key saved to $CONFIG_FILE"
+        else
+            info "Skipped. You can set the API key later in the web GUI Settings."
+        fi
+    fi
+else
+    info "No API key provided. You can set it later via the web GUI Settings."
+    info "NmapPilot will try local Ollama as fallback."
+fi
+
+
 # ── Ensure ~/.local/bin is in PATH ──
 echo ""
 info "Checking PATH…"

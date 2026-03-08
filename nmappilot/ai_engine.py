@@ -1,350 +1,525 @@
-"""NmapPilot — Ollama AI Engine for natural language scan control."""
+"""NmapPilot — AI Engine with OpenRouter (free models) + Ollama fallback."""
 
 import json
+import os
 import re
 import threading
+import time
 import requests
-from typing import Optional
+from typing import Optional, List, Dict
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Constants
+#  Config
 # ═══════════════════════════════════════════════════════════════════════
 
+CONFIG_DIR = os.path.expanduser("~/.config/nmappilot")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+
+OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 OLLAMA_BASE = "http://localhost:11434"
-MODEL_NAME = "wizard-vicuna-uncensored:13b"
 
-SYSTEM_PROMPT = """You are NmapPilot AI — an expert cybersecurity assistant built into an automated Nmap scanning tool running on Kali Linux. Your job is to help users perform network reconnaissance and vulnerability assessments through natural language.
+# Hardcoded fallback list in case the API fetch fails
+DEFAULT_FREE_MODELS = [
+    "meta-llama/llama-3.1-8b-instruct:free",
+    "google/gemma-2-9b-it:free",
+    "mistralai/mistral-7b-instruct:free",
+    "huggingfaceh4/zephyr-7b-beta:free",
+    "openchat/openchat-7b:free",
+    "qwen/qwen-2-7b-instruct:free",
+]
 
-CAPABILITIES:
-- Parse natural language requests to extract scan targets and parameters
-- Analyze scan results and explain vulnerabilities in plain English
-- Provide actionable security recommendations
-- Answer cybersecurity and networking questions
+SYSTEM_PROMPT = """You are NmapPilot AI — an expert cybersecurity assistant built into an automated Nmap scanning tool running on Kali Linux.
 
-WHEN THE USER WANTS TO SCAN A TARGET:
-You MUST respond with a JSON block wrapped in ```json ... ``` containing:
+CRITICAL RESPONSE FORMAT RULES:
+When the user asks you to scan something, suggest specific nmap commands, or requests reconnaissance:
+1. Provide a clear markdown explanation of your plan
+2. Then include a JSON block wrapped in ```json ... ``` with this EXACT structure:
+```json
 {
-  "action": "scan",
-  "target": "<IP or hostname>",
-  "scan_type": "quick|service|aggressive|comprehensive",
-  "max_phase": 1-4,
-  "no_vuln": false,
-  "no_dos": false,
-  "ports": null or "80,443,8080" or "1-1000",
-  "message": "<brief confirmation message to show the user>"
+  "commands": [
+    {"cmd": "nmap -sS -T4 --top-ports 1000 <target>", "description": "Quick SYN scan of top 1000 ports"},
+    {"cmd": "nmap -sV -sC -p <ports> <target>", "description": "Service/version detection on discovered ports"}
+  ]
 }
+```
 
-SCAN TYPE MAPPING:
-- "quick" / "fast" / "basic" → scan_type: "quick", max_phase: 1
-- "service" / "version" / "detect services" → scan_type: "service", max_phase: 2
-- "aggressive" / "full" / "deep" / "thorough" → scan_type: "aggressive", max_phase: 3
-- "comprehensive" / "everything" / "complete" → scan_type: "comprehensive", max_phase: 4
-- Default (just a target with no specifics) → scan_type: "service", max_phase: 2
+IMPORTANT RULES FOR COMMANDS:
+- Always use real, valid nmap commands with proper flags
+- Include the actual target IP/hostname in the commands
+- Order commands from quick/safe to aggressive/deep
+- Explain WHAT each command does and WHY you chose those specific flags
+- You can suggest multiple commands that build on each other
+- Never auto-execute — the user will click Run on the commands they want
 
 WHEN THE USER ASKS A QUESTION (not requesting a scan):
-Respond normally in markdown format. Be concise, technical, and helpful.
+Respond normally in markdown format. Be concise, technical, and helpful. Do NOT include a commands JSON block.
 
 WHEN ANALYZING RESULTS:
-Provide a structured analysis with:
+The current scan results will be provided as context. Provide:
 1. Executive summary (1-2 sentences)
 2. Key findings (critical issues first)
 3. Risk assessment
-4. Recommended actions
+4. Recommended next steps (can include follow-up nmap commands in the JSON block)
 
-Always be direct and technical. You are running on Kali Linux for authorized penetration testing."""
+NMAP CHEATSHEET (use these as building blocks):
+## Discovery & Host Detection
+- `nmap -sn <target>` — Ping sweep, no port scan
+- `nmap -Pn <target>` — Skip host discovery, treat all hosts as online
+- `nmap -sn -PE -PP -PM <target>` — ICMP echo, timestamp, netmask discovery
+
+## Port Scanning Techniques
+- `nmap -sS <target>` — TCP SYN (stealth) scan [requires root]
+- `nmap -sT <target>` — TCP connect scan [no root needed]
+- `nmap -sU <target>` — UDP scan
+- `nmap -sA <target>` — TCP ACK scan (firewall rule detection)
+- `nmap -sW <target>` — TCP Window scan
+- `nmap -sN/sF/sX <target>` — TCP Null/FIN/Xmas scans (IDS evasion)
+- `nmap -sM <target>` — TCP Maimon scan
+- `nmap --scanflags URGACKPSHRSTSYNFIN <target>` — Custom TCP flags
+
+## Port Specification
+- `-p 80,443,8080` — Specific ports
+- `-p 1-1000` — Port range
+- `-p-` — All 65535 ports
+- `--top-ports 100` — Top N most common ports
+- `-F` — Fast scan (top 100 ports)
+- `-r` — Scan ports sequentially (don't randomize)
+
+## Service & Version Detection
+- `nmap -sV <target>` — Service/version detection
+- `nmap -sV --version-intensity 5 <target>` — Aggressive version detection
+- `nmap -sV --version-all <target>` — Try all probes for version detection
+- `nmap -A <target>` — Aggressive: OS + version + scripts + traceroute
+- `nmap -O <target>` — OS detection [requires root]
+
+## NSE Scripts
+- `nmap --script=default <target>` or `-sC` — Default scripts
+- `nmap --script=vuln <target>` — All vulnerability scripts
+- `nmap --script=auth <target>` — Authentication-related scripts
+- `nmap --script=exploit <target>` — Exploitation scripts
+- `nmap --script=http-enum <target>` — HTTP directory enumeration
+- `nmap --script=ssl-enum-ciphers -p 443 <target>` — SSL/TLS audit
+- `nmap --script=smb-vuln* <target>` — SMB vulnerability checks
+- `nmap --script=dns-brute <target>` — DNS subdomain brute force
+- `nmap --script=http-waf-detect <target>` — WAF detection
+- `nmap --script=banner <target>` — Banner grabbing
+
+## Timing & Performance
+- `-T0` — Paranoid (IDS evasion)
+- `-T1` — Sneaky
+- `-T2` — Polite
+- `-T3` — Normal (default)
+- `-T4` — Aggressive
+- `-T5` — Insane
+- `--min-rate 1000` — Min packets/sec
+- `--max-retries 1` — Reduce retries for speed
+
+## Evasion & Stealth
+- `-f` — Fragment packets
+- `-D RND:10` — Use 10 random decoys
+- `--data-length 25` — Append random data to packets
+- `--randomize-hosts` — Randomize target scan order
+- `-S <spoofed_ip>` — Spoof source IP
+- `-g 53` — Use source port 53 (DNS)
+- `--spoof-mac 0` — Random MAC address
+
+## Output
+- `-oN file.txt` — Normal output
+- `-oX file.xml` — XML output
+- `-oG file.gnmap` — Grepable output
+- `-oA basename` — All formats at once
+- `-v` / `-vv` — Increase verbosity
+- `--reason` — Show reason for port state
+- `--open` — Only show open ports
+
+## Useful Combinations
+- Quick recon: `nmap -sS -T4 --top-ports 1000 -oN quick.txt <target>`
+- Full service scan: `nmap -sS -sV -sC -O -T4 -p- -oN full.txt <target>`
+- Vuln assessment: `nmap -sV --script=vuln,auth,exploit -p <ports> <target>`
+- Stealth scan: `nmap -sS -T2 -f -D RND:5 --data-length 25 <target>`
+- UDP quick: `nmap -sU --top-ports 50 -T4 <target>`
+- Web server audit: `nmap -sV --script=http-enum,http-headers,http-methods,http-waf-detect -p 80,443,8080,8443 <target>`
+
+Always be direct and technical. You are running on Kali Linux for authorized penetration testing only."""
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  OllamaAI class
+#  Config helpers
 # ═══════════════════════════════════════════════════════════════════════
 
-class OllamaAI:
-    """Interface to the local Ollama LLM for NmapPilot."""
-
-    def __init__(self, model: str = MODEL_NAME, base_url: str = OLLAMA_BASE):
-        self.model = model
-        self.base_url = base_url
-        self.conversation_history = []
-        self._lock = threading.Lock()
-        self._available = None
-
-    # ── Health check ──────────────────────────────────────────────────
-
-    def is_available(self) -> bool:
-        """Check if Ollama is running and the model is loaded."""
-        if self._available is not None:
-            return self._available
+def load_config() -> dict:
+    """Load config from ~/.config/nmappilot/config.json."""
+    if os.path.exists(CONFIG_FILE):
         try:
-            resp = requests.get(f"{self.base_url}/api/tags", timeout=5)
+            with open(CONFIG_FILE, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {}
+
+
+def save_config(cfg: dict):
+    """Save config to ~/.config/nmappilot/config.json."""
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(cfg, f, indent=2)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  AIEngine — OpenRouter (free models) + Ollama fallback
+# ═══════════════════════════════════════════════════════════════════════
+
+class AIEngine:
+    """Unified AI interface: OpenRouter free models with auto-fallback, Ollama as last resort."""
+
+    def __init__(self):
+        self.conversation_history: List[Dict[str, str]] = []
+        self._lock = threading.Lock()
+        self._config = load_config()
+
+        # OpenRouter
+        self._api_key = self._config.get("openrouter_api_key", "")
+        self._free_models: List[str] = self._config.get("free_models", [])
+        self._current_model_idx = 0
+        self._preferred_model = self._config.get("preferred_model", "")
+
+        # Ollama fallback
+        self._ollama_model = self._config.get("ollama_model", "")
+        self._ollama_base = OLLAMA_BASE
+
+        # Status
+        self._backend = "none"  # "openrouter", "ollama", or "none"
+        self._status_message = ""
+        self._initialized = False
+
+    # ── Initialize — discover free models ──────────────────────────
+
+    def initialize(self):
+        """Discover available free models and set up the backend."""
+        if self._initialized:
+            return
+
+        # Try OpenRouter first
+        if self._api_key:
+            self._discover_free_models()
+            if self._free_models:
+                self._backend = "openrouter"
+                model_name = self._free_models[0]
+                self._status_message = f"OpenRouter: {model_name}"
+                self._initialized = True
+                return
+
+        # Fall back to Ollama
+        if self._check_ollama():
+            self._backend = "ollama"
+            self._status_message = f"Ollama: {self._ollama_model}"
+            self._initialized = True
+            return
+
+        self._backend = "none"
+        self._status_message = "No AI backend available"
+        self._initialized = True
+
+    def _discover_free_models(self):
+        """Fetch all free models from OpenRouter API."""
+        try:
+            resp = requests.get(
+                f"{OPENROUTER_BASE}/models",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                models = resp.json().get("data", [])
+                free = []
+                for m in models:
+                    pricing = m.get("pricing", {})
+                    prompt_price = str(pricing.get("prompt", "1"))
+                    completion_price = str(pricing.get("completion", "1"))
+                    if prompt_price == "0" and completion_price == "0":
+                        free.append(m["id"])
+
+                if free:
+                    self._free_models = free
+                    # Put preferred model first if it's in the list
+                    if self._preferred_model and self._preferred_model in free:
+                        free.remove(self._preferred_model)
+                        free.insert(0, self._preferred_model)
+                        self._free_models = free
+
+                    # Cache to config
+                    self._config["free_models"] = self._free_models
+                    save_config(self._config)
+                    return
+        except Exception:
+            pass
+
+        # Use cached or defaults
+        if not self._free_models:
+            self._free_models = list(DEFAULT_FREE_MODELS)
+
+    def _check_ollama(self) -> bool:
+        """Check if Ollama is running and find available models."""
+        try:
+            resp = requests.get(f"{self._ollama_base}/api/tags", timeout=5)
             if resp.status_code == 200:
                 models = [m["name"] for m in resp.json().get("models", [])]
-                self._available = self.model in models
-            else:
-                self._available = False
+                if models:
+                    if self._ollama_model and self._ollama_model in models:
+                        return True
+                    self._ollama_model = models[0]
+                    return True
         except Exception:
-            self._available = False
-        return self._available
+            pass
+        return False
 
-    # ── Core chat ─────────────────────────────────────────────────────
+    # ── Public properties ──────────────────────────────────────────
 
-    def chat(self, user_message: str, context: str = "") -> str:
-        """Send a message to the LLM and return the full response."""
-        with self._lock:
-            messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    @property
+    def is_available(self) -> bool:
+        if not self._initialized:
+            self.initialize()
+        return self._backend != "none"
 
-            if context:
-                messages.append({
-                    "role": "system",
-                    "content": f"CURRENT CONTEXT:\n{context}"
-                })
+    @property
+    def backend(self) -> str:
+        if not self._initialized:
+            self.initialize()
+        return self._backend
 
-            # Include recent history (last 10 exchanges to stay within context)
-            for msg in self.conversation_history[-20:]:
-                messages.append(msg)
+    @property
+    def current_model(self) -> str:
+        if self._backend == "openrouter" and self._free_models:
+            idx = min(self._current_model_idx, len(self._free_models) - 1)
+            return self._free_models[idx]
+        if self._backend == "ollama":
+            return self._ollama_model
+        return "none"
 
-            messages.append({"role": "user", "content": user_message})
+    @property
+    def status_message(self) -> str:
+        if not self._initialized:
+            self.initialize()
+        return self._status_message
 
-            # Add user message to history BEFORE the API call so concurrent
-            # requests see it immediately.
-            self.conversation_history.append(
-                {"role": "user", "content": user_message}
-            )
+    @property
+    def free_models(self) -> List[str]:
+        return list(self._free_models)
 
-        try:
-            resp = requests.post(
-                f"{self.base_url}/api/chat",
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "stream": False,
-                    "options": {
-                        "temperature": 0.3,
-                        "num_predict": 2048,
-                    }
-                },
-                timeout=300,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            reply = data.get("message", {}).get("content", "").strip()
+    # ── Config management ──────────────────────────────────────────
 
-            # Save assistant reply to history
-            with self._lock:
-                self.conversation_history.append(
-                    {"role": "assistant", "content": reply}
-                )
+    def set_api_key(self, key: str):
+        """Update OpenRouter API key and re-initialize."""
+        self._api_key = key.strip()
+        self._config["openrouter_api_key"] = self._api_key
+        save_config(self._config)
+        self._initialized = False
+        self._free_models = []
+        self._current_model_idx = 0
+        self.initialize()
 
-            return reply
+    def set_preferred_model(self, model: str):
+        """Set preferred model."""
+        self._preferred_model = model
+        self._config["preferred_model"] = model
+        save_config(self._config)
+        # Move to front
+        if model in self._free_models:
+            self._free_models.remove(model)
+            self._free_models.insert(0, model)
+            self._current_model_idx = 0
 
-        except requests.exceptions.Timeout:
-            return "⚠️ AI response timed out. The model may be loading — please try again in a moment."
-        except requests.exceptions.ConnectionError:
-            self._available = False
-            return "⚠️ Cannot connect to Ollama. Make sure it's running: `systemctl start ollama` or `ollama serve`"
-        except Exception as e:
-            return f"⚠️ AI error: {str(e)}"
+    def get_config(self) -> dict:
+        return {
+            "api_key_set": bool(self._api_key),
+            "api_key_preview": f"{self._api_key[:8]}...{self._api_key[-4:]}" if len(self._api_key) > 12 else ("***" if self._api_key else ""),
+            "backend": self._backend,
+            "current_model": self.current_model,
+            "preferred_model": self._preferred_model,
+            "free_models": self._free_models,
+            "ollama_model": self._ollama_model,
+            "status": self._status_message,
+        }
 
-    # ── Streaming chat ────────────────────────────────────────────────
+    # ── Streaming chat (primary path) ──────────────────────────────
 
     def chat_stream(self, user_message: str, context: str = ""):
-        """Send a message and yield response tokens as they arrive."""
-        # Build message list and commit user message to history BEFORE streaming
-        # so that any subsequent request sees this message immediately.
+        """Send a message and yield response tokens. Auto-fallback through free models."""
+        if not self._initialized:
+            self.initialize()
+
+        # Build messages
         with self._lock:
             messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-
             if context:
-                messages.append({
-                    "role": "system",
-                    "content": f"CURRENT CONTEXT:\n{context}"
-                })
-
+                messages.append({"role": "system", "content": f"CURRENT CONTEXT:\n{context}"})
             for msg in self.conversation_history[-20:]:
                 messages.append(msg)
-
             messages.append({"role": "user", "content": user_message})
+            self.conversation_history.append({"role": "user", "content": user_message})
 
-            # Add user message to history NOW (before streaming starts)
-            self.conversation_history.append(
-                {"role": "user", "content": user_message}
-            )
+        full_response = []
+        success = False
 
-        try:
-            resp = requests.post(
-                f"{self.base_url}/api/chat",
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "stream": True,
-                    "options": {
-                        "temperature": 0.3,
-                        "num_predict": 2048,
-                    }
-                },
-                timeout=300,
-                stream=True,
-            )
-            resp.raise_for_status()
+        if self._backend == "openrouter":
+            # Try each free model until one works
+            start_idx = self._current_model_idx
+            tried = 0
+            while tried < len(self._free_models):
+                idx = (start_idx + tried) % len(self._free_models)
+                model = self._free_models[idx]
+                tried += 1
 
-            full_response = []
-            for line in resp.iter_lines():
-                if line:
-                    try:
-                        chunk = json.loads(line)
-                        token = chunk.get("message", {}).get("content", "")
-                        if token:
-                            full_response.append(token)
-                            yield token
-                        if chunk.get("done", False):
-                            break
-                    except json.JSONDecodeError:
-                        continue
+                try:
+                    for token in self._openrouter_stream(messages, model):
+                        full_response.append(token)
+                        yield token
 
-            # Save assistant reply to history after streaming completes
-            complete = "".join(full_response)
-            with self._lock:
-                self.conversation_history.append(
-                    {"role": "assistant", "content": complete}
-                )
-
-        except requests.exceptions.Timeout:
-            yield "⚠️ AI response timed out. Please try again."
-        except requests.exceptions.ConnectionError:
-            self._available = False
-            yield "⚠️ Cannot connect to Ollama. Run: `ollama serve`"
-        except Exception as e:
-            yield f"⚠️ AI error: {str(e)}"
-
-    # ── Parse natural language into scan parameters ───────────────────
-
-    def parse_scan_request(self, user_message: str) -> dict:
-        """Parse a natural language request and extract scan parameters.
-
-        Returns
-        -------
-        dict
-            Keys: action, target, scan_type, max_phase, no_vuln, no_dos,
-                  ports, message, raw_response
-        """
-        response = self.chat(user_message)
-        result = self._extract_json(response)
-        result["raw_response"] = response
-        return result
-
-    def _extract_json(self, text: str) -> dict:
-        """Extract JSON scan parameters from LLM response."""
-        # Try to find ```json ... ``` block
-        json_match = re.search(r'```json\s*\n?(.*?)\n?\s*```', text, re.DOTALL)
-        if json_match:
-            try:
-                data = json.loads(json_match.group(1))
-                if data.get("action") == "scan" and data.get("target"):
-                    return self._normalize_scan_params(data)
-            except json.JSONDecodeError:
-                pass
-
-        # Try to find raw JSON object
-        json_match = re.search(r'\{[^{}]*"action"\s*:\s*"scan"[^{}]*\}', text, re.DOTALL)
-        if json_match:
-            try:
-                data = json.loads(json_match.group(0))
-                if data.get("target"):
-                    return self._normalize_scan_params(data)
-            except json.JSONDecodeError:
-                pass
-
-        # Fallback: try to extract target manually from common patterns
-        target = self._extract_target_fallback(text)
-        if target:
-            return {
-                "action": "scan",
-                "target": target,
-                "scan_type": "service",
-                "max_phase": 2,
-                "no_vuln": False,
-                "no_dos": False,
-                "ports": None,
-                "message": text,
-            }
-
-        # No scan detected — this is a general chat response
-        return {
-            "action": "chat",
-            "message": text,
-            "target": None,
-        }
-
-    def _normalize_scan_params(self, data: dict) -> dict:
-        """Ensure all expected keys exist with valid values."""
-        scan_type = str(data.get("scan_type", "service")).lower()
-        phase_map = {
-            "quick": 1, "fast": 1,
-            "service": 2, "version": 2,
-            "aggressive": 3, "full": 3, "deep": 3,
-            "comprehensive": 4, "complete": 4, "everything": 4,
-        }
-        max_phase = data.get("max_phase")
-        if not isinstance(max_phase, int) or max_phase < 1 or max_phase > 4:
-            max_phase = phase_map.get(scan_type, 2)
-
-        return {
-            "action": "scan",
-            "target": str(data.get("target", "")),
-            "scan_type": scan_type,
-            "max_phase": max_phase,
-            "no_vuln": bool(data.get("no_vuln", False)),
-            "no_dos": bool(data.get("no_dos", False)),
-            "ports": data.get("ports"),
-            "message": str(data.get("message", "Starting scan...")),
-        }
-
-    def _extract_target_fallback(self, text: str) -> Optional[str]:
-        """Try to find an IP or hostname in the user's message or AI response."""
-        # Look in the original user message from history
-        if self.conversation_history:
-            last_user = ""
-            for msg in reversed(self.conversation_history):
-                if msg["role"] == "user":
-                    last_user = msg["content"]
+                    # If we get here, it worked
+                    self._current_model_idx = idx
+                    self._status_message = f"OpenRouter: {model}"
+                    success = True
                     break
+                except Exception as e:
+                    error_msg = str(e)
+                    # Model failed — try next one
+                    if tried < len(self._free_models):
+                        next_model = self._free_models[(start_idx + tried) % len(self._free_models)]
+                        yield f"\n\n⚠️ Model `{model}` failed ({error_msg}). Switching to `{next_model}`...\n\n"
+                        full_response = []  # Reset for new model
+                    continue
 
-            # IP address
-            ip_match = re.search(
-                r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b', last_user
-            )
-            if ip_match:
-                return ip_match.group(1)
+        if not success and self._backend == "openrouter":
+            # All OpenRouter models failed — try Ollama
+            if self._check_ollama():
+                yield "\n\n⚠️ All OpenRouter free models failed. Falling back to local Ollama...\n\n"
+                self._backend = "ollama"
 
-            # Domain-like pattern
-            domain_match = re.search(
-                r'\b([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?'
-                r'(?:\.[a-zA-Z]{2,})+)\b',
-                last_user,
-            )
-            if domain_match:
-                return domain_match.group(1)
+        if not success and self._backend == "ollama":
+            try:
+                for token in self._ollama_stream(messages):
+                    full_response.append(token)
+                    yield token
+                self._status_message = f"Ollama: {self._ollama_model}"
+                success = True
+            except Exception as e:
+                yield f"\n\n⚠️ Ollama error: {e}"
 
-        return None
+        if not success and self._backend == "none":
+            yield "⚠️ No AI backend available. Please configure an OpenRouter API key in Settings, or start Ollama locally."
 
-    # ── Analyze scan results ──────────────────────────────────────────
+        # Save assistant response
+        complete = "".join(full_response)
+        if complete:
+            with self._lock:
+                self.conversation_history.append({"role": "assistant", "content": complete})
+
+    # ── Non-streaming chat ─────────────────────────────────────────
+
+    def chat(self, user_message: str, context: str = "") -> str:
+        """Non-streaming chat — collects full response."""
+        tokens = []
+        for token in self.chat_stream(user_message, context):
+            tokens.append(token)
+        return "".join(tokens)
+
+    # ── OpenRouter streaming ───────────────────────────────────────
+
+    def _openrouter_stream(self, messages: list, model: str):
+        """Stream from OpenRouter API. Raises on failure."""
+        resp = requests.post(
+            f"{OPENROUTER_BASE}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://github.com/Neelpatel5656/NmapPilot",
+                "X-Title": "NmapPilot",
+            },
+            json={
+                "model": model,
+                "messages": messages,
+                "stream": True,
+                "temperature": 0.3,
+                "max_tokens": 4096,
+            },
+            timeout=120,
+            stream=True,
+        )
+
+        if resp.status_code != 200:
+            error_text = ""
+            try:
+                error_text = resp.json().get("error", {}).get("message", resp.text[:200])
+            except Exception:
+                error_text = resp.text[:200]
+            raise RuntimeError(f"HTTP {resp.status_code}: {error_text}")
+
+        for line in resp.iter_lines():
+            if not line:
+                continue
+            line_str = line.decode("utf-8", errors="replace")
+            if not line_str.startswith("data: "):
+                continue
+            data_str = line_str[6:]
+            if data_str.strip() == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data_str)
+                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                token = delta.get("content", "")
+                if token:
+                    yield token
+            except (json.JSONDecodeError, IndexError, KeyError):
+                continue
+
+    # ── Ollama streaming ───────────────────────────────────────────
+
+    def _ollama_stream(self, messages: list):
+        """Stream from local Ollama. Raises on failure."""
+        resp = requests.post(
+            f"{self._ollama_base}/api/chat",
+            json={
+                "model": self._ollama_model,
+                "messages": messages,
+                "stream": True,
+                "options": {"temperature": 0.3, "num_predict": 4096},
+            },
+            timeout=300,
+            stream=True,
+        )
+        resp.raise_for_status()
+
+        for line in resp.iter_lines():
+            if line:
+                try:
+                    chunk = json.loads(line)
+                    token = chunk.get("message", {}).get("content", "")
+                    if token:
+                        yield token
+                    if chunk.get("done", False):
+                        break
+                except json.JSONDecodeError:
+                    continue
+
+    # ── Analyze results ────────────────────────────────────────────
 
     def analyze_results(self, scan_data: dict) -> str:
-        """Feed scan results to the AI for analysis."""
         context = json.dumps(scan_data, indent=2, default=str)
-        prompt = (
-            "Analyze these NmapPilot scan results. Provide:\n"
-            "1. Executive summary\n"
-            "2. Critical findings\n"
-            "3. Risk level assessment\n"
-            "4. Recommended next steps\n\n"
-            f"Scan Results:\n```json\n{context}\n```"
+        return self.chat(
+            "Analyze these NmapPilot scan results. Provide executive summary, "
+            "critical findings, risk assessment, and recommended next steps.",
+            context=f"Scan Results:\n{context}"
         )
-        return self.chat(prompt)
 
-    # ── Reset conversation ────────────────────────────────────────────
+    # ── Reset ──────────────────────────────────────────────────────
 
     def reset(self):
-        """Clear conversation history."""
         with self._lock:
             self.conversation_history.clear()
+
+    def refresh_models(self):
+        """Re-fetch free models from OpenRouter."""
+        self._free_models = []
+        self._current_model_idx = 0
+        self._initialized = False
+        self.initialize()
